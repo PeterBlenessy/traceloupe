@@ -1786,10 +1786,12 @@ pub async fn run_triage_scan(
                     ScanEvent::Confirming { done, total },
                     done == 0 || done == total,
                 ),
-                // The full-pass grooming signal reports as deep-scan progress:
-                // it IS a scan of every thread, and the existing event keeps
-                // the UI contract unchanged (#521 scoped UI out).
-                TriageProgress::Grooming { done, total } => (
+                // The full-pass grooming signal and the router both report as
+                // census progress in spirit — they read every thread — but the
+                // existing event keeps the UI contract unchanged (#521 and
+                // #544 both scoped UI out).
+                TriageProgress::Grooming { done, total }
+                | TriageProgress::Routing { done, total } => (
                     ScanEvent::DeepScanning {
                         done,
                         total,
@@ -1935,6 +1937,7 @@ pub async fn run_triage_scan(
             confirm,
             grooming,
             heads,
+            |_| Ok(None),
             &cancel,
             progress,
         )

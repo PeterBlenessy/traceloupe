@@ -1283,6 +1283,7 @@ mod tests {
             |_: &FocusWindow, _: &FocusVerdict| Ok(true),
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1386,6 +1387,7 @@ mod tests {
                 confirm2,
                 |_| Ok(None),
                 |_| Ok(Vec::new()),
+                |_| Ok(None),
                 &CancelToken::new(),
                 |_| {},
             )
@@ -1600,6 +1602,7 @@ mod tests {
             |_: &FocusWindow, _: &FocusVerdict| Ok(true),
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |p: TriageProgress| match p {
                 TriageProgress::Census { done, total } => {
@@ -1610,7 +1613,7 @@ mod tests {
                         println!("  census {done}/{total}");
                     }
                 }
-                TriageProgress::Grooming { .. } => {}
+                TriageProgress::Grooming { .. } | TriageProgress::Routing { .. } => {}
                 TriageProgress::DeepScan { done, total, .. } => {
                     if done % 10 == 0 && done > 0 {
                         println!("  deep-scan {done}/{total}");
@@ -2814,6 +2817,7 @@ mod tests {
             |_: &FocusWindow, _| Ok(true),
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |p: TriageProgress| {
                 if let TriageProgress::DeepScan { done, total, .. } = p {
@@ -2929,6 +2933,7 @@ mod tests {
                 confirm2,
                 |_| Ok(None),
                 |_| Ok(Vec::new()),
+                |_| Ok(None),
                 &CancelToken::new(),
                 |p: TriageProgress| match p {
                     TriageProgress::Census { total, .. } => {
@@ -2940,7 +2945,7 @@ mod tests {
                         }
                     }
                     TriageProgress::DeepScan { .. } => {}
-                    TriageProgress::Grooming { .. } => {}
+                    TriageProgress::Grooming { .. } | TriageProgress::Routing { .. } => {}
                 },
             )
             .expect("run_triage precise");
@@ -3337,6 +3342,7 @@ mod pattern_tier_acceptance {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -3649,6 +3655,7 @@ mod grooming_e2e {
             confirm,
             grooming,
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
