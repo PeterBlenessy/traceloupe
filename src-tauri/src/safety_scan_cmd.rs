@@ -1841,24 +1841,6 @@ pub async fn run_triage_scan(
                 None
             }
         };
-        // The deep-scan router (#544): same absent-is-a-no-op contract. It
-        // shares the grooming tokenizer — same base model, same vocabulary —
-        // so a user who already has the grooming artefacts downloads one file.
-        use traceloupe_core::safety_scan::router::{DeepScanRouter, ROUTER_MODEL};
-        let mut router_clf = match (
-            ROUTER_MODEL.installed_at(&dir),
-            GROOMING_TOKENIZER.installed_at(&dir),
-        ) {
-            (Some(m), Some(t)) => match DeepScanRouter::load(&m, &t) {
-                Ok(c) => Some(c),
-                Err(e) => {
-                    crate::logging::warn(&app2, format!("deep-scan router unavailable: {e}"));
-                    None
-                }
-            },
-            _ => None,
-        };
-
         // The loud-category heads (#525): same absent-is-a-no-op contract.
         use traceloupe_core::safety_scan::civil_heads::{
             CivilHeads, CENSUS_BOOST_ACTIVE, CIVIL_HEADS_MODEL,
@@ -1941,12 +1923,14 @@ pub async fn run_triage_scan(
                 })
                 .map_err(traceloupe_core::Error::Inference)
         };
+        // The deep-scan router (#544). Unlike the grooming signal there is no
+        // artefact and no absent case: the model is 1.9 MB compiled into the
+        // binary, because a 151 MB network scored the same on the same
+        // haystack and did not earn the download (see router.rs).
         let route = |thread: &[traceloupe_core::safety_scan::triage::CensusInput]|
             -> traceloupe_core::Result<Option<(f32, usize)>> {
             use traceloupe_core::safety_scan::grooming_onnx::WINDOW_MESSAGES;
-            let Some(clf) = router_clf.as_mut() else {
-                return Ok(None);
-            };
+            let clf = traceloupe_core::safety_scan::router::shipped();
             // Materialise only the two scored windows, as the grooming pass
             // does: a 40k-message thread must not be cloned to read 20 of them.
             let head_end = thread.len().min(WINDOW_MESSAGES);
@@ -1970,18 +1954,15 @@ pub async fn run_triage_scan(
                         .map(to_item)
                         .collect()
                 };
-            clf.thread_score(&slim)
-                .map(|(score, i)| {
-                    // Map the anchor back to the real thread index, exactly as
-                    // the grooming pass must (#522 finding 2).
-                    let anchor = if thread.len() <= WINDOW_MESSAGES * 2 || i < head_end {
-                        i
-                    } else {
-                        base + (i - head_end)
-                    };
-                    Some((score, anchor))
-                })
-                .map_err(traceloupe_core::Error::Inference)
+            let (score, i) = clf.thread_score(&slim);
+            // Map the anchor back to the real thread index, exactly as the
+            // grooming pass must (#522 finding 2).
+            let anchor = if thread.len() <= WINDOW_MESSAGES * 2 || i < head_end {
+                i
+            } else {
+                base + (i - head_end)
+            };
+            Ok(Some((score, anchor)))
         };
         let outcome = triage_scan::run_triage(
             &mut analysis,
