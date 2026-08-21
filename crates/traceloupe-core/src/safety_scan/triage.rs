@@ -14,6 +14,15 @@
 //! see `census_threshold` below and
 //! docs/validation/safety-scan-validation.md. The census threshold is a
 //! monotonic dial on that; the modes are the points we expose.
+//!
+//! **What the census does NOT do (#544).** Measured against real harm inside
+//! real traffic — 6,000 ordinary chat conversations, harm planted at a 1.1%
+//! base rate — this scoring ranks a predator conversation above an ordinary one
+//! 62% of the time, and ranks scam and self-harm BELOW ordinary chatter
+//! (0.005 and 0.017; a coin flip is 0.5). Centroids rebuilt from real held-out
+//! positives scored WORSE, so it is the method, not the examples. The threshold
+//! here therefore decides CANDIDACY only; what the deep scan reads first is
+//! decided by `router.rs`.
 
 /// How aggressively a scan trades recall for precision and time. The UI shows
 /// the NAME and a plain description, never the underlying numbers — accuracy
