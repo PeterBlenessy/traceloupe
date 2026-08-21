@@ -1616,3 +1616,64 @@ generated ones, which was visible in the numbers hours before I understood what
 it was telling me — it was not that hand-written material is *somewhat* better
 per example, it was that most of the generated material is not an example of
 anything.
+
+## The census ranks harm barely above chance (#544, 2026-08-21)
+
+Everything above measures the census against fixtures written for the purpose.
+This measures it against **real harm inside real traffic**, and the result
+changes what the earlier tables mean.
+
+**The bed.** 6,000 ordinary conversations from PAN12's *test* corpus — real
+chat, disjoint from the shipped grooming detector's training corpus — with 27
+real predator conversations, 20 real smishing messages and 20 real C-SSRS
+self-harm posts planted. A 1.1% base rate, near what a phone holds. Scored with
+the product's own embedder: the bundled `llama-server`, the Q8 EmbeddingGemma
+GGUF, `--pooling mean`, the same task prefix and 1,500-byte cap as `triage.rs`.
+
+**Rank separation vs ordinary chat** (1.0 perfect, 0.5 a coin flip):
+
+| | census (shipped centroids) | census (centroids from REAL positives) | lexical router (#545) |
+|---|---|---|---|
+| grooming | 0.624 | 0.514 | **0.996** |
+| scam | 0.005 | 0.043 | (rules tier) |
+| self-harm | 0.017 | 0.100 | **0.996** |
+
+**Share of planted harm inside the top K% of the phone:**
+
+| top K% | census: grooming / scam / self-harm | router: grooming / self-harm |
+|---|---|---|
+| 1% | 0/27 · 0/20 · 0/20 | 22/27 · 17/20 |
+| 5% | 4/27 · 0/20 · 0/20 | **27/27 · 20/20** |
+| 50% | 10/27 · 0/20 · 0/20 | 27/27 · 20/20 |
+
+Three findings, two of them uncomfortable:
+
+1. **For scam and self-harm the census ranking is INVERTED** — 0.005 and 0.017
+   mean real harm scores *below* ordinary chatter almost every time. Two
+   structural causes, both inherent to the method: a long single message
+   mean-pools into a diffuse vector that sits far from centroids built from
+   chat lines, and a conversation's score is the MAX over its messages, so a
+   ten-message thread gets ten tickets in the lottery and a one-message scam
+   gets one. A phone's smishing arrives exactly like that.
+2. **Better examples do not fix it.** Centroids built from real held-out
+   positives scored *worse* than the hand-written ones, because real predator
+   chat and real ordinary chat occupy the same region of the embedding space.
+   That is the method, not the prototype corpus — and it retires the premise of
+   the prototype work above.
+3. **A 1.9 MB word-count model ranks it at 0.996**, which is why #545 orders the
+   deep-scan worklist by that instead.
+
+**What this does NOT invalidate.** The census threshold still decides
+*candidacy*, and the recall/cost tables above measure that. What changed is
+ORDER: under a budget, the deep scan now reads the router's ranking first, so
+the posture recall figures — measured when a budget cut the census's own order —
+predate the change and understate what a budgeted scan now finds. They are left
+as recorded rather than adjusted by arithmetic; re-measuring them needs another
+end-to-end run with a real model.
+
+**Caveats.** PAN12's "ordinary" is IRC and channel chat, not phone messages —
+some of it technical talk that is easier to rank against than family chatter.
+The scam and self-harm plants come from a different register than the bed, which
+is why a length-matched control was computed (it moved the numbers very little:
+0.007 and 0.051). The grooming arm is the clean one — bed and positives from the
+same corpus, in the same register, with the model's training split held out.
