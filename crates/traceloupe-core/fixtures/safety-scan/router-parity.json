@@ -1,0 +1,72 @@
+{
+ "_comment": [
+  "Parity fixture for the Rust reimplementation of the lexical",
+  "router's transform. Texts are INVENTED for this test — parity is",
+  "arithmetic, not content — and cover accents, digits, casing,",
+  "punctuation, a one-character token, an empty string and a long",
+  "line. `score` is the probability of the model the app ships,",
+  "computed by the exporter's reference implementation."
+ ],
+ "cases": [
+  {
+   "text": "A: are you done at 4 or 4:30 today\nB: 4:30, we ran over last week",
+   "score": 0.408917
+  },
+  {
+   "text": "A: can you grab milk on the way home\nB: sure, 2 pints?",
+   "score": 0.422116
+  },
+  {
+   "text": "A: dont tell your mum we talked about this ok",
+   "score": 0.487975
+  },
+  {
+   "text": "A: I'm so tired I could sleep for a WEEK",
+   "score": 0.502511
+  },
+  {
+   "text": "A: café renové — naïve façade, jalapeño",
+   "score": 0.251981
+  },
+  {
+   "text": "A: u up",
+   "score": 0.771757
+  },
+  {
+   "text": "A: x",
+   "score": 0.251589
+  },
+  {
+   "text": "",
+   "score": 0.251589
+  },
+  {
+   "text": "A: Your parcel is out for delivery between 09:00 and 13:00.",
+   "score": 0.30036
+  },
+  {
+   "text": "A: hey\nB: hey\nA: hey\nB: hey",
+   "score": 0.150513
+  },
+  {
+   "text": "A: one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five one two three four five ",
+   "score": 0.284327
+  },
+  {
+   "text": "A: 12345 67890 ¿qué tal? ça va",
+   "score": 0.212711
+  },
+  {
+   "text": "A: STOP MESSAGING ME",
+   "score": 0.544834
+  },
+  {
+   "text": "A: it's not you it's me, i'll call you tomorrow",
+   "score": 0.713878
+  },
+  {
+   "text": "A: whats your address\nB: why do you want to know\nA: just curious",
+   "score": 0.576548
+  }
+ ]
+}

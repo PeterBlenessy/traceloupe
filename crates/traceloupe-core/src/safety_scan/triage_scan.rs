@@ -53,6 +53,8 @@ pub enum TriageProgress {
     Confirm { done: usize, total: usize },
     /// The full-pass grooming signal: `done` of `total` threads scored.
     Grooming { done: usize, total: usize },
+    /// The deep-scan router: `done` of `total` threads ranked (#544).
+    Routing { done: usize, total: usize },
 }
 
 /// What a triage scan did, for the honest coverage report.
@@ -72,6 +74,13 @@ pub struct TriageOutcome {
     pub scam_flagged: usize,
     /// Threads where the head pass errored (audited, skipped).
     pub heads_failed: usize,
+    /// Threads the router promoted into the worklist — the census had kept
+    /// nothing from them, so without this they could not be deep-scanned at
+    /// all, however high they rank (#544).
+    pub routed_promoted: usize,
+    /// Threads where the router errored (audited, skipped — the thread keeps
+    /// its census position rather than losing its place).
+    pub router_failed: usize,
     /// Messages at or above the mode's threshold — the deep-scan demand.
     pub candidates: usize,
     /// Messages actually deep-scanned (candidates, minus what a budget cut).
@@ -278,7 +287,7 @@ pub fn classify_focused(client: &LlmClient, window: &FocusWindow) -> Result<Focu
 /// written — the mode promised a confirmed result, and a resume re-classifies
 /// the worklist.
 #[allow(clippy::too_many_arguments)]
-pub fn run_triage<E, C, F, G, H, P>(
+pub fn run_triage<E, C, F, G, H, R, P>(
     analysis: &mut AnalysisDb,
     scan_id: i64,
     threads: &[Vec<CensusInput>],
@@ -305,6 +314,11 @@ pub fn run_triage<E, C, F, G, H, P>(
     // budget, so the deep scan judges them like any census candidate. Callers
     // without the model pass `|_| Ok(Vec::new())`.
     mut heads: H,
+    // The deep-scan router (#544): called once per thread; returns the thread's
+    // rank score and the index to anchor a promoted item on, or None when no
+    // router is installed. Callers without the model pass `|_| Ok(None)` and
+    // the ordering is exactly what it was before this feature existed.
+    mut route: R,
     cancel: &CancelToken,
     mut progress: P,
 ) -> Result<TriageOutcome>
@@ -314,6 +328,7 @@ where
     F: FnMut(&FocusWindow, &FocusVerdict) -> Result<bool>,
     G: FnMut(&[CensusInput]) -> Result<Option<usize>>,
     H: FnMut(&[&CensusInput]) -> Result<Vec<(usize, crate::analysis::Category)>>,
+    R: FnMut(&[CensusInput]) -> Result<Option<(f32, usize)>>,
     P: FnMut(TriageProgress),
 {
     let mut out = TriageOutcome::default();
@@ -478,6 +493,102 @@ where
             out.candidates = worklist.len();
         }
     }
+    // --- phase 2.6: the deep-scan router (#544) ---
+    // The census decides WHETHER a message is a candidate; this decides in what
+    // ORDER the deep scan reads them, and gives threads the census kept nothing
+    // from a way in. Measured on real harm in real traffic, the census ranks a
+    // predator conversation above an ordinary one 62% of the time and ranks
+    // self-harm BELOW ordinary chatter; this ranks the same haystack at 0.991
+    // and 0.792. Everything here is a RANK: int8 quantisation preserves the
+    // order but moves individual scores by up to 0.95, so a score compared to a
+    // constant would mean something different after quantisation.
+    let mut router_scores: Vec<Option<(f32, usize)>> = vec![None; threads.len()];
+    let mut routed_any = false;
+    if !cancel.is_cancelled() {
+        progress(TriageProgress::Routing {
+            done: 0,
+            total: threads.len(),
+        });
+        for (ti, thread) in threads.iter().enumerate() {
+            if cancel.is_cancelled() {
+                out.cancelled = true;
+                break;
+            }
+            match route(thread) {
+                Ok(Some((score, anchor))) => {
+                    router_scores[ti] = Some((score, anchor));
+                    routed_any = true;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    // A ranking aid must never sink the scan: the thread keeps
+                    // its census position instead of losing its place.
+                    out.router_failed += 1;
+                    let _ = analysis.audit(
+                        scan_id,
+                        now,
+                        "triage_router_failed",
+                        &format!("thread {ti}: {e}"),
+                    );
+                }
+            }
+            progress(TriageProgress::Routing {
+                done: ti + 1,
+                total: threads.len(),
+            });
+        }
+    }
+    if routed_any {
+        // Promotion, capped as a share of the phone: only threads inside the
+        // top slice by rank, and only those the census kept nothing from. The
+        // 5% is the operating point the experiment measured — 27/27 planted
+        // grooming conversations and 19/20 self-harm disclosures sit inside it.
+        let represented: std::collections::HashSet<usize> = worklist
+            .iter()
+            .filter_map(|w| locate.get(&w.source_id).map(|&(ti, _)| ti))
+            .collect();
+        let mut ranked: Vec<(usize, f32, usize)> = router_scores
+            .iter()
+            .enumerate()
+            .filter_map(|(ti, s)| s.map(|(score, anchor)| (ti, score, anchor)))
+            .collect();
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+        ranked.truncate(super::router::promotion_budget(threads.len()));
+        for (ti, _score, anchor) in ranked {
+            if represented.contains(&ti) {
+                continue;
+            }
+            let Some(m) = threads[ti].get(anchor) else {
+                continue;
+            };
+            out.routed_promoted += 1;
+            worklist.push(crate::analysis::WorkItem {
+                source_id: m.source_id,
+                thread_identifier: m.thread_identifier.clone(),
+                sender: m.sender.clone(),
+                // Ordering comes from the sort below, not from this field.
+                score: 0.0,
+                cell_hot: 0,
+                fingerprint: m.fingerprint.clone(),
+            });
+        }
+        // One stable sort by the thread's rank score. Stability is what keeps
+        // the census's own ordering inside a thread and leaves head-appended
+        // items where they were relative to each other. A thread the router
+        // could not score sorts as 0.0 — behind everything it ranked, which is
+        // the honest place for "unknown" when the alternative ordering has been
+        // measured at near chance.
+        let rank_of = |source_id: i64| -> f32 {
+            locate
+                .get(&source_id)
+                .and_then(|&(ti, _)| router_scores[ti])
+                .map(|(score, _)| score)
+                .unwrap_or(0.0)
+        };
+        worklist.sort_by(|a, b| rank_of(b.source_id).total_cmp(&rank_of(a.source_id)));
+        out.candidates = worklist.len();
+    }
+
     // Census candidates before the budget bites — the scam tier must judge
     // "did the census keep this?", not "did the budget reach it?".
     let pre_budget_ids: std::collections::HashSet<i64> =
@@ -979,6 +1090,7 @@ mod tests {
             confirm,
             grooming,
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1040,6 +1152,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1121,6 +1234,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1210,6 +1324,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             heads,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1260,6 +1375,7 @@ mod tests {
             confirm,
             grooming,
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1301,6 +1417,7 @@ mod tests {
             confirm,
             grooming,
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1308,6 +1425,205 @@ mod tests {
         assert_eq!(out.grooming_failed, 1);
         assert_eq!(out.findings, 0);
         assert!(!out.cancelled);
+    }
+
+    /// #544: under a budget, the router decides what the deep scan reads.
+    /// The census ranks thread A first; the router says thread B. The budget
+    /// is one item, and it must be spent on B.
+    #[test]
+    fn the_router_reorders_the_worklist_before_the_budget_bites() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![
+            vec![msg_at(1, "them", "census likes this one", 1000)],
+            vec![msg_at(2, "them", "the router likes this one", 2000)],
+        ];
+        // Both clear the census; id 1 scores higher, so it ranks first today.
+        let embed = |t: &str| {
+            Ok(if t.contains("census likes") {
+                vec![1.0, 0.0]
+            } else {
+                vec![0.95, 0.05]
+            })
+        };
+        let seen = std::cell::Cell::new(0i64);
+        let classify = |w: &FocusWindow| -> Result<FocusOutcome> {
+            seen.set(w.items[w.focus].source_id);
+            Ok(FocusOutcome::default())
+        };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> { Ok(true) };
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Thorough,
+            0.5,
+            Some(1), // one item of deep scan: whoever ranks first gets it
+            1,
+            embed,
+            classify,
+            confirm,
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            // Thread index 1 outranks thread index 0.
+            |t: &[CensusInput]| {
+                Ok(Some(if t[0].source_id == 2 {
+                    (0.9, 0)
+                } else {
+                    (0.1, 0)
+                }))
+            },
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.deep_scanned, 1, "the budget still caps the work");
+        assert_eq!(
+            seen.get(),
+            2,
+            "the budget was spent on the thread the ROUTER ranked first, not \
+             the one the census did"
+        );
+    }
+
+    /// #544: a thread the census kept NOTHING from can still be deep-scanned,
+    /// because ordering alone cannot rescue a thread that is not on the list.
+    /// The promoted item anchors on the window that scored, not on message one.
+    #[test]
+    fn the_router_promotes_a_thread_the_census_dropped_entirely() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![vec![
+            msg_at(1, "them", "hi", 1000),
+            msg_at(2, "them", "how was school", 2000),
+            msg_at(3, "them", "dont tell your mum we talked", 3000),
+        ]];
+        let embed = |_: &str| Ok(vec![0.0, 1.0]); // census keeps nothing at all
+        let seen = std::cell::Cell::new(0i64);
+        let classify = |w: &FocusWindow| -> Result<FocusOutcome> {
+            seen.set(w.items[w.focus].source_id);
+            Ok(FocusOutcome::default())
+        };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> { Ok(true) };
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Thorough,
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Some((0.99, 2))), // anchor on the third message
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.routed_promoted, 1);
+        assert_eq!(out.deep_scanned, 1, "the promoted thread was read");
+        assert_eq!(
+            seen.get(),
+            3,
+            "anchored on the window that scored, not the top of the thread"
+        );
+    }
+
+    /// #544: with no router installed the scan must be what it was before the
+    /// feature existed — same candidates, same order, same work.
+    #[test]
+    fn no_router_means_the_census_order_is_untouched() {
+        fn run(route: impl FnMut(&[CensusInput]) -> Result<Option<(f32, usize)>>) -> Vec<i64> {
+            let mut db = AnalysisDb::open_in_memory().unwrap();
+            let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+            let threads = vec![
+                vec![msg_at(1, "them", "census likes this one", 1000)],
+                vec![msg_at(2, "them", "census likes this less", 2000)],
+            ];
+            let embed = |t: &str| {
+                Ok(if t.contains("likes this one") {
+                    vec![1.0, 0.0]
+                } else {
+                    vec![0.95, 0.05]
+                })
+            };
+            let order = std::cell::RefCell::new(Vec::new());
+            let classify = |w: &FocusWindow| -> Result<FocusOutcome> {
+                order.borrow_mut().push(w.items[w.focus].source_id);
+                Ok(FocusOutcome::default())
+            };
+            let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> { Ok(true) };
+            run_triage(
+                &mut db,
+                scan,
+                &threads,
+                &[vec![1.0, 0.0]],
+                ScanMode::Thorough,
+                0.5,
+                None,
+                1,
+                embed,
+                classify,
+                confirm,
+                |_| Ok(None),
+                |_| Ok(Vec::new()),
+                route,
+                &CancelToken::new(),
+                |_| {},
+            )
+            .unwrap();
+            order.into_inner()
+        }
+        let without = run(|_| Ok(None));
+        assert_eq!(without, vec![1, 2], "census order, best first");
+        // And a router that ranks them the other way round proves the test
+        // above is measuring the ordering rather than a fixed sequence.
+        let with = run(|t: &[CensusInput]| {
+            Ok(Some(if t[0].source_id == 2 {
+                (0.9, 0)
+            } else {
+                (0.1, 0)
+            }))
+        });
+        assert_eq!(with, vec![2, 1], "the router's order, when one is present");
+    }
+
+    /// #544: a router that errors is audited and the scan proceeds — a
+    /// ranking aid must never be able to fail a scan.
+    #[test]
+    fn a_router_error_is_audited_and_the_scan_survives() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![vec![msg_at(1, "them", "something worth reading", 1000)]];
+        let embed = |_: &str| Ok(vec![1.0, 0.0]);
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> { Ok(FocusOutcome::default()) };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> { Ok(true) };
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Thorough,
+            0.5,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Err(crate::Error::Inference("onnx exploded".into())),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.router_failed, 1);
+        assert_eq!(out.deep_scanned, 1, "the scan still read its candidate");
     }
 
     fn msg_at(id: i64, sender: &str, text: &str, at: i64) -> CensusInput {
@@ -1373,6 +1689,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1427,6 +1744,7 @@ mod tests {
             veto,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1450,6 +1768,7 @@ mod tests {
             veto,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1492,6 +1811,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1821,6 +2141,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1871,6 +2192,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &cancel,
             progress,
         )
@@ -1924,6 +2246,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &cancel,
             |_| {},
         )
@@ -1973,6 +2296,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &cancel,
             |_| {},
         )
@@ -2014,6 +2338,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -2096,6 +2421,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -2151,6 +2477,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -2205,6 +2532,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &cancel,
             |_| {},
         )
@@ -2249,6 +2577,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -2283,6 +2612,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -2331,6 +2661,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -2373,6 +2704,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -2409,6 +2741,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -2435,6 +2768,7 @@ mod tests {
             confirm,
             |_| Ok(None),
             |_| Ok(Vec::new()),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )

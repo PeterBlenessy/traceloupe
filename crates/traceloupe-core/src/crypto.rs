@@ -869,8 +869,14 @@ mod tests {
             GenericArray::from_slice(key),
             GenericArray::from_slice(&ZERO_IV),
         );
-        for chunk in buf.chunks_exact_mut(16) {
-            enc.encrypt_block_mut(GenericArray::from_mut_slice(chunk));
+        // Indexed rather than `chunks_exact_mut(16)`: clippy 1.98 (which CI
+        // runs) rejects a constant chunk size in favour of `as_chunks_mut`,
+        // which is not stable on 1.95 (which this checkout runs). Walking the
+        // offset compiles clean on both and does exactly the same thing.
+        let mut offset = 0;
+        while offset + 16 <= buf.len() {
+            enc.encrypt_block_mut(GenericArray::from_mut_slice(&mut buf[offset..offset + 16]));
+            offset += 16;
         }
         buf
     }

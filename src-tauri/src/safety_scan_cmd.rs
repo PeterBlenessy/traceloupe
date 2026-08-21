@@ -1786,10 +1786,12 @@ pub async fn run_triage_scan(
                     ScanEvent::Confirming { done, total },
                     done == 0 || done == total,
                 ),
-                // The full-pass grooming signal reports as deep-scan progress:
-                // it IS a scan of every thread, and the existing event keeps
-                // the UI contract unchanged (#521 scoped UI out).
-                TriageProgress::Grooming { done, total } => (
+                // The full-pass grooming signal and the router both report as
+                // census progress in spirit — they read every thread — but the
+                // existing event keeps the UI contract unchanged (#521 and
+                // #544 both scoped UI out).
+                TriageProgress::Grooming { done, total }
+                | TriageProgress::Routing { done, total } => (
                     ScanEvent::DeepScanning {
                         done,
                         total,
@@ -1921,6 +1923,47 @@ pub async fn run_triage_scan(
                 })
                 .map_err(traceloupe_core::Error::Inference)
         };
+        // The deep-scan router (#544). Unlike the grooming signal there is no
+        // artefact and no absent case: the model is 1.9 MB compiled into the
+        // binary, because a 151 MB network scored the same on the same
+        // haystack and did not earn the download (see router.rs).
+        let route = |thread: &[traceloupe_core::safety_scan::triage::CensusInput]|
+            -> traceloupe_core::Result<Option<(f32, usize)>> {
+            use traceloupe_core::safety_scan::grooming_onnx::WINDOW_MESSAGES;
+            let clf = traceloupe_core::safety_scan::router::shipped();
+            // Materialise only the two scored windows, as the grooming pass
+            // does: a 40k-message thread must not be cloned to read 20 of them.
+            let head_end = thread.len().min(WINDOW_MESSAGES);
+            let base = thread.len().saturating_sub(WINDOW_MESSAGES);
+            let to_item = |m: &traceloupe_core::safety_scan::triage::CensusInput| {
+                traceloupe_core::safety_scan::chunker::ChunkItem {
+                    source_id: m.source_id,
+                    sender: m.sender.clone(),
+                    occurred_at: m.occurred_at,
+                    text: m.text.clone(),
+                    fingerprint: m.fingerprint.clone(),
+                }
+            };
+            let slim: Vec<traceloupe_core::safety_scan::chunker::ChunkItem> =
+                if thread.len() <= WINDOW_MESSAGES * 2 {
+                    thread.iter().map(to_item).collect()
+                } else {
+                    thread[..head_end]
+                        .iter()
+                        .chain(thread[base..].iter())
+                        .map(to_item)
+                        .collect()
+                };
+            let (score, i) = clf.thread_score(&slim);
+            // Map the anchor back to the real thread index, exactly as the
+            // grooming pass must (#522 finding 2).
+            let anchor = if thread.len() <= WINDOW_MESSAGES * 2 || i < head_end {
+                i
+            } else {
+                base + (i - head_end)
+            };
+            Ok(Some((score, anchor)))
+        };
         let outcome = triage_scan::run_triage(
             &mut analysis,
             scan_row_id,
@@ -1935,6 +1978,7 @@ pub async fn run_triage_scan(
             confirm,
             grooming,
             heads,
+            route,
             &cancel,
             progress,
         )
