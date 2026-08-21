@@ -1006,7 +1006,7 @@ where
         now,
         "triage_deep_scan",
         &format!(
-            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={} heads_flagged={} heads_failed={} patterns_flagged={} scam_flagged={}",
+            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={} heads_flagged={} heads_failed={} patterns_flagged={} scam_flagged={} routed_promoted={} router_failed={}",
             out.deep_scanned,
             out.findings,
             out.rejected,
@@ -1020,7 +1020,9 @@ where
             out.heads_flagged,
             out.heads_failed,
             out.patterns_flagged,
-            out.scam_flagged
+            out.scam_flagged,
+            out.routed_promoted,
+            out.router_failed
         ),
     );
     Ok(out)
@@ -1624,6 +1626,49 @@ mod tests {
         .unwrap();
         assert_eq!(out.router_failed, 1);
         assert_eq!(out.deep_scanned, 1, "the scan still read its candidate");
+    }
+
+    /// Every tier reports what it did in the scan's audit line — that line is
+    /// how a coverage question gets answered months later. The router's
+    /// promotions were missing from it (#544 follow-up): the tier ran, changed
+    /// what was read, and left no trace anyone could count.
+    #[test]
+    fn the_audit_line_records_what_the_router_did() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![vec![
+            msg_at(1, "them", "hi", 1000),
+            msg_at(2, "them", "how was school", 2000),
+        ]];
+        let embed = |_: &str| Ok(vec![0.0, 1.0]); // census keeps nothing
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> { Ok(FocusOutcome::default()) };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> { Ok(true) };
+        run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Thorough,
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Some((0.99, 1))),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        let lines = db.audit_details(scan, "triage_deep_scan").unwrap();
+        let line = lines.first().expect("the deep scan logs its summary");
+        assert!(
+            line.contains("routed_promoted=1"),
+            "the router's promotions must be countable from the audit line: {line}"
+        );
+        assert!(line.contains("router_failed=0"), "{line}");
     }
 
     fn msg_at(id: i64, sender: &str, text: &str, at: i64) -> CensusInput {

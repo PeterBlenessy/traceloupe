@@ -2870,6 +2870,20 @@ impl AnalysisDb {
         )? > 0)
     }
 
+    /// Every `detail` logged under `event` for a scan, oldest first.
+    ///
+    /// The audit log is how a coverage question gets answered months later
+    /// ("did that tier run, and what did it do?"), so it needs a reader as well
+    /// as a writer. Content-free by construction — `audit` refuses source text
+    /// by contract — so this cannot leak message content.
+    pub fn audit_details(&self, scan_id: i64, event: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT detail FROM audit_log WHERE scan_id = ?1 AND event = ?2 ORDER BY rowid",
+        )?;
+        let rows = stmt.query_map(params![scan_id, event], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     pub fn audit(&self, scan_id: i64, at: i64, event: &str, detail: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO audit_log (scan_id, at, event, detail) VALUES (?1, ?2, ?3, ?4)",
