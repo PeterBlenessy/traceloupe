@@ -48,6 +48,20 @@ else
   echo "✓ worktree ready: $WT (new branch '$SLUG' off $BASE)"
 fi
 
+# The llama-server sidecar and its dylibs are gitignored (too large, platform
+# specific), so a fresh worktree has none and `cargo check` dies in the Tauri
+# build script with "resource path doesn't exist" — before compiling a line of
+# your code. Link them to the main checkout's copies, exactly as the existing
+# worktrees do. `-n` on the directory link matters: without it a second run
+# nests the link inside itself.
+if [ -d "$MAIN_ROOT/src-tauri/binaries" ] && [ -d "$WT/src-tauri/binaries" ]; then
+  for f in "$MAIN_ROOT"/src-tauri/binaries/llama-server-*; do
+    [ -e "$f" ] && ln -sf "$f" "$WT/src-tauri/binaries/$(basename "$f")"
+  done
+  [ -d "$MAIN_ROOT/src-tauri/binaries/lib" ] && ln -sfn "$MAIN_ROOT/src-tauri/binaries/lib" "$WT/src-tauri/binaries/lib"
+  echo "  linked the llama-server sidecar from the main checkout"
+fi
+
 if [ -f "$WT/package.json" ]; then
   echo "  installing JS deps (own node_modules, isolated build)…"
   (cd "$WT" && pnpm install --silent) || echo "  (pnpm install failed — run it yourself in the worktree)"

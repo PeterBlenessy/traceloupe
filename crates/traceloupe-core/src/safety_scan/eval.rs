@@ -3667,3 +3667,121 @@ mod grooming_e2e {
         assert_eq!(rows[0].thread_identifier.as_deref(), Some("planted"));
     }
 }
+
+/// The routing claim, measured through the SHIPPED code path (#544).
+///
+/// The parity fixture in `router.rs` proves the transform agrees with
+/// scikit-learn on fifteen texts. It does not prove the claim the feature was
+/// built on — that the shipped model puts 27 of 27 real predator conversations
+/// in the top 5% of a phone. Only real data does that, and real data cannot
+/// enter this repo (PAN12's terms forbid redistribution), so the haystack lives
+/// outside it and this test is skipped without it.
+///
+/// ```text
+/// TRACELOUPE_ROUTER_HAYSTACK=~/.traceloupe-dev/router-haystack.jsonl \
+///   cargo test -p traceloupe-core router_recall_vs_cost -- --ignored --nocapture
+/// ```
+///
+/// Regenerate the haystack with `harness/export_haystack_jsonl.py` in the
+/// training repo.
+#[cfg(test)]
+mod router_measurement {
+    use super::super::chunker::ChunkItem;
+    use super::super::router;
+
+    #[derive(serde::Deserialize)]
+    struct Row {
+        label: String,
+        messages: Vec<(String, String)>,
+    }
+
+    #[test]
+    #[ignore]
+    fn router_recall_vs_cost() {
+        let Ok(path) = std::env::var("TRACELOUPE_ROUTER_HAYSTACK") else {
+            eprintln!("skipped: needs TRACELOUPE_ROUTER_HAYSTACK");
+            return;
+        };
+        let raw = std::fs::read_to_string(&path).expect("haystack file");
+        let rows: Vec<Row> = raw
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).expect("one JSON object per line"))
+            .collect();
+        let planted = rows.iter().filter(|r| r.label != "ordinary").count();
+        println!(
+            "haystack: {} threads, {planted} planted ({:.2}%)",
+            rows.len(),
+            100.0 * planted as f64 / rows.len() as f64
+        );
+
+        let clf = router::shipped();
+        let started = std::time::Instant::now();
+        let mut scored: Vec<(f32, &str)> = rows
+            .iter()
+            .map(|r| {
+                let items: Vec<ChunkItem> = r
+                    .messages
+                    .iter()
+                    .map(|(who, text)| ChunkItem {
+                        source_id: 0,
+                        sender: who.clone(),
+                        occurred_at: None,
+                        text: text.clone(),
+                        fingerprint: String::new(),
+                    })
+                    .collect();
+                (clf.thread_score(&items).0, r.label.as_str())
+            })
+            .collect();
+        let elapsed = started.elapsed();
+        println!(
+            "scored {} threads in {:.2}s ({:.0} µs/thread)",
+            rows.len(),
+            elapsed.as_secs_f64(),
+            elapsed.as_micros() as f64 / rows.len() as f64
+        );
+
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let categories: Vec<&str> = {
+            let mut c: Vec<&str> = rows
+                .iter()
+                .map(|r| r.label.as_str())
+                .filter(|l| *l != "ordinary")
+                .collect();
+            c.sort_unstable();
+            c.dedup();
+            c
+        };
+        let total_of = |cat: &str| scored.iter().filter(|(_, l)| *l == cat).count();
+
+        let mut at_five: Vec<(String, usize, usize)> = Vec::new();
+        for pct in [1usize, 2, 5, 10, 20, 50] {
+            let k = (scored.len() * pct / 100).max(1);
+            let head = &scored[..k];
+            let cells: Vec<String> = categories
+                .iter()
+                .map(|c| {
+                    let got = head.iter().filter(|(_, l)| l == c).count();
+                    let total = total_of(c);
+                    if pct == 5 {
+                        at_five.push(((*c).to_string(), got, total));
+                    }
+                    format!("{c} {got}/{total}")
+                })
+                .collect();
+            println!("  top {pct:>2}% ({k:>4} threads):  {}", cells.join("   "));
+        }
+
+        // The shipped claim, asserted rather than printed: everything the
+        // measurement promised must still be inside the top 5%. A regression in
+        // the weights, the tokenizer or the windowing fails here.
+        for (cat, got, total) in at_five {
+            assert!(
+                got * 100 >= total * 95,
+                "top 5% held {got}/{total} of {cat} — the shipped claim is \
+                 27/27 grooming and 20/20 self-harm"
+            );
+        }
+    }
+}

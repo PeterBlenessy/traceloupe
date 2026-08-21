@@ -28,6 +28,12 @@
 //! into the binary, with no artefact to download, no checksum to pin and
 //! nothing to keep in sync.
 //!
+//! Measured through this code path on the real haystack
+//! (`router_recall_vs_cost` in eval.rs, ignored without the data): **6,047
+//! threads ranked in 0.14 s — 23 µs per thread**, holding 27/27 grooming and
+//! 20/20 self-harm in the top 5%. The network it replaced needed ~14 ms per
+//! conversation, roughly 600x more, for the same ranking.
+//!
 //! Two properties this tier deliberately does NOT have:
 //!
 //! * **No findings.** It decides reading order. Every verdict still comes from

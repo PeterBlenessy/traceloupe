@@ -1677,3 +1677,27 @@ The scam and self-harm plants come from a different register than the bed, which
 is why a length-matched control was computed (it moved the numbers very little:
 0.007 and 0.051). The grooming arm is the clean one — bed and positives from the
 same corpus, in the same register, with the model's training split held out.
+
+### Verified through the shipped code path (2026-08-21)
+
+The numbers above were measured in Python. `router_recall_vs_cost`
+(`eval.rs`, `#[ignore]`, reads the haystack from outside the repo) runs the
+same 6,047-thread haystack through the SHIPPED Rust implementation:
+
+```
+haystack: 6047 threads, 47 planted (0.78%)   <!-- not-a-backup-count: PAN12 -->
+scored 6047 threads in 0.14s (23 µs/thread)  <!-- not-a-backup-count: PAN12 -->
+  top  1% (  60 threads):  grooming 22/27   self-harm 17/20
+  top  5% ( 302 threads):  grooming 27/27   self-harm 20/20   <!-- not-a-backup-count: PAN12 -->
+```
+
+(The `not-a-backup-count` markers are load-bearing: the privacy guard cannot
+tell a public corpus's thread count from a count of the user's own data, and it
+is right to stop at both. These are PAN12's, and no figure here derives from any
+real device.)
+
+Identical to the Python measurement, and the test ASSERTS the top 5% still
+holds ≥95% of each category — a regression in the weights, the tokenizer or the
+windowing fails it rather than quietly degrading the scan. 23 µs per thread is
+roughly 600x cheaper than the ~14 ms/conversation of the ModernBERT the tier
+did not ship.
