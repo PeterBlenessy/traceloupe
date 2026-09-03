@@ -2,10 +2,25 @@
 //! (plan T5). Non-streaming — the engine wants whole verdict objects, and
 //! chunk latency is dominated by generation either way.
 //!
-//! Privacy invariants (ADR 0002): requests go only to the configured loopback
-//! base URL, and NOTHING from a request or response is ever logged here —
-//! errors carry status codes and parse messages, never prompt or completion
-//! text.
+//! Privacy invariants (ADR 0002): NOTHING from a request or response is ever
+//! logged here — errors carry status codes and parse messages, never prompt or
+//! completion text.
+//!
+//! **The base URL is no longer loopback by construction.** Users may point the
+//! scan at their own model — Ollama, LM Studio, vLLM, or a hosted API — which
+//! means message text can leave the machine. That is a deliberate,
+//! opt-in-only change: the command layer refuses to build a remote client
+//! without explicit consent, and this module simply honours whatever base URL
+//! it is given. Two consequences live here:
+//!
+//! * **Dialect.** The local sidecar is llama.cpp and takes a GBNF `grammar`
+//!   field; no third-party server does. OpenAI-compatible endpoints take
+//!   `response_format` instead, and reject unknown fields outright. So the
+//!   request body branches on which kind of server is on the other end.
+//! * **What leaves.** Only the deep scan is remoted. The census embedder stays
+//!   local always — embedding every message remotely would send the whole phone
+//!   to a third party, which is the opposite of the product's purpose. With the
+//!   router in front (#544), the deep scan sees roughly the top 5% of a device.
 
 use std::time::Duration;
 
@@ -13,12 +28,27 @@ use serde_json::{json, Value};
 
 use crate::{Error, Result};
 
+/// Which server is on the other end, and therefore how structured output is
+/// requested. Not cosmetic: llama.cpp needs `grammar`, and OpenAI-compatible
+/// servers return HTTP 400 for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Dialect {
+    /// The bundled llama-server. GBNF grammar, and `cache_prompt` to reuse the
+    /// ~1000-token system prefix across focused calls.
+    #[default]
+    LlamaCpp,
+    /// Anything speaking the OpenAI chat API: Ollama, LM Studio, vLLM, hosted
+    /// providers. Structured output via `response_format`, no llama.cpp extras.
+    OpenAi,
+}
+
 pub struct LlmClient {
     agent: ureq::Agent,
     base_url: String,
     model: String,
     /// Sent as `Authorization: Bearer …` when the server requires `--api-key`.
     api_key: Option<String>,
+    dialect: Dialect,
 }
 
 impl LlmClient {
@@ -32,7 +62,19 @@ impl LlmClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             api_key: None,
+            dialect: Dialect::default(),
         }
+    }
+
+    /// Speak to a third-party OpenAI-compatible server rather than the bundled
+    /// llama-server.
+    pub fn with_dialect(mut self, dialect: Dialect) -> Self {
+        self.dialect = dialect;
+        self
+    }
+
+    pub fn dialect(&self) -> Dialect {
+        self.dialect
     }
 
     /// Attach the server's per-run bearer token (see `server::generate_api_key`).
@@ -60,7 +102,8 @@ impl LlmClient {
     ) -> Result<Value> {
         let body = self.chat_json_body(system, user, grammar, max_tokens);
         let content = self.post_chat(&body)?;
-        serde_json::from_str(&content)
+        let content = strip_code_fence(&content);
+        serde_json::from_str(content)
             .map_err(|_| Error::Inference("completion content is not valid JSON".into()))
     }
 
@@ -80,17 +123,30 @@ impl LlmClient {
         grammar: &str,
         max_tokens: u32,
     ) -> Value {
-        json!({
+        let mut body = json!({
             "model": self.model,
             "temperature": 0,
             "max_tokens": max_tokens,
-            "grammar": grammar,
-            "cache_prompt": true,
             "messages": [
                 { "role": "system", "content": system },
                 { "role": "user", "content": user },
             ],
-        })
+        });
+        match self.dialect {
+            Dialect::LlamaCpp => {
+                body["grammar"] = json!(grammar);
+                body["cache_prompt"] = json!(true);
+            }
+            Dialect::OpenAi => {
+                // `grammar` and `cache_prompt` are llama.cpp extensions and a
+                // strict server rejects the whole request for them. The nearest
+                // portable constraint is JSON mode; the shape is then enforced
+                // by parsing, and a model that ignores it fails the same way a
+                // malformed local response does — one skipped chunk, audited.
+                body["response_format"] = json!({ "type": "json_object" });
+            }
+        }
+        body
     }
 
     /// One free-text call (the T6 summary passes) — same privacy rules, no
@@ -200,5 +256,53 @@ impl LlmClient {
             .get(&format!("{}/health", self.base_url))
             .call()
             .is_ok()
+    }
+}
+
+/// Some OpenAI-compatible servers wrap the completion in a ```json fence even
+/// in JSON mode. Stripping it is the difference between "works with the user's
+/// Ollama" and "skips every chunk"; on unfenced content this is a no-op.
+fn strip_code_fence(content: &str) -> &str {
+    let t = content.trim();
+    let Some(rest) = t.strip_prefix("```") else {
+        return t;
+    };
+    let rest = rest.strip_prefix("json").unwrap_or(rest);
+    rest.trim_start_matches('\n')
+        .strip_suffix("```")
+        .unwrap_or(rest)
+        .trim()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_llama_cpp_body_carries_its_grammar_and_the_openai_body_does_not() {
+        let local = LlmClient::new("http://127.0.0.1:1", "m", Duration::from_secs(1));
+        let body = local.chat_json_body("s", "u", "root ::= \"x\"", 64);
+        assert!(body["grammar"].is_string(), "llama.cpp needs the grammar");
+        assert_eq!(body["cache_prompt"], json!(true));
+        assert!(body["response_format"].is_null());
+
+        let remote = LlmClient::new("https://example.invalid", "m", Duration::from_secs(1))
+            .with_dialect(Dialect::OpenAi);
+        let body = remote.chat_json_body("s", "u", "root ::= \"x\"", 64);
+        assert!(
+            body["grammar"].is_null() && body["cache_prompt"].is_null(),
+            "llama.cpp extensions must never reach a third-party server: a \
+             strict one rejects the whole request"
+        );
+        assert_eq!(body["response_format"]["type"], json!("json_object"));
+        assert_eq!(body["temperature"], json!(0));
+    }
+
+    #[test]
+    fn fenced_json_from_a_third_party_server_still_parses() {
+        assert_eq!(strip_code_fence("{\"a\":1}"), "{\"a\":1}");
+        assert_eq!(strip_code_fence("```json\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(strip_code_fence("```\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(strip_code_fence("  {\"a\":1}  "), "{\"a\":1}");
     }
 }

@@ -1595,6 +1595,18 @@ export interface TraceLoupeClient {
      *  The backend converts to a count of places with the same cost model that
      *  produced the estimate, so what is shown and what is enforced agree. */
     budgetHours?: number | null;
+    /** Bring your own model: an OpenAI-compatible endpoint (Ollama, LM Studio,
+     *  vLLM, a hosted API) for the deep scan and its confirmer. The census
+     *  embedder always stays local, so at most the top ~5% of a device that the
+     *  router selects is ever sent. */
+    endpointUrl?: string | null;
+    endpointModel?: string | null;
+    endpointApiKey?: string | null;
+    /** The user's answer to "this sends the messages being scanned to that
+     *  server". The backend REFUSES to build an endpoint without it, and it is
+     *  passed per scan rather than stored — consent to send one device's
+     *  messages somewhere should not outlive the scan it was given for. */
+    endpointAcknowledged?: boolean | null;
   }): Promise<void>;
   /** Estimate a triage scan of the current scope BEFORE running it, for every
    *  posture at once — the expensive part is counting the messages in scope and
@@ -2330,6 +2342,10 @@ const tauriClient: TraceLoupeClient = {
       rangeEnd: opts.rangeEnd ?? null,
       sources: opts.sources ?? null,
       budgetHours: opts.budgetHours ?? null,
+      endpointUrl: opts.endpointUrl ?? null,
+      endpointModel: opts.endpointModel ?? null,
+      endpointApiKey: opts.endpointApiKey ?? null,
+      endpointAcknowledged: opts.endpointAcknowledged ?? null,
     }),
   estimateTriageScan: (opts) =>
     invoke("estimate_triage_scan", {

@@ -1543,7 +1543,39 @@ pub async fn run_triage_scan(
     // the estimate they saw — is what keeps the promise and the enforcement
     // from drifting apart.
     budget_hours: Option<f64>,
+    // BRING YOUR OWN MODEL: an OpenAI-compatible endpoint the user runs or
+    // subscribes to (Ollama, LM Studio, vLLM, a hosted API). When set, the deep
+    // scan and its confirmer talk to it instead of the bundled sidecar. The
+    // census embedder is NOT remoted — see remote.rs for why.
+    //
+    // `endpoint_acknowledged` is the user's answer to "this sends the messages
+    // being scanned to that server". It is passed per scan rather than saved:
+    // consent to send one device's messages somewhere is not a preference that
+    // should outlive the scan it was given for.
+    endpoint_url: Option<String>,
+    endpoint_model: Option<String>,
+    endpoint_api_key: Option<String>,
+    endpoint_acknowledged: Option<bool>,
 ) -> Result<(), String> {
+    // Built BEFORE anything expensive: a mistyped address should fail in the
+    // dialog, not after twenty minutes of census.
+    let endpoint = match endpoint_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    {
+        Some(url) => Some(
+            traceloupe_core::safety_scan::remote::RemoteEndpoint::new(
+                url,
+                endpoint_model.as_deref().unwrap_or(""),
+                endpoint_api_key.clone(),
+                endpoint_acknowledged.unwrap_or(false),
+            )
+            .map_err(|e| e.message().to_string())?,
+        ),
+        None => None,
+    };
+
     use traceloupe_core::safety_scan::chunker;
     use traceloupe_core::safety_scan::triage::{self, FocusWindow};
     use traceloupe_core::safety_scan::triage_scan::{self, FocusVerdict, TriageProgress};
@@ -1742,7 +1774,16 @@ pub async fn run_triage_scan(
         });
 
         let embed = |t: &str| sidecar.borrow().client.embed(t);
+        // One client for the whole scan when an endpoint is configured: a
+        // remote server has no sidecar to start, no model to swap and no RAM
+        // floor to respect.
+        let remote_client = endpoint
+            .as_ref()
+            .map(|e| e.client(std::time::Duration::from_secs(180)));
         let classify = |w: &FocusWindow| {
+            if let Some(client) = &remote_client {
+                return triage_scan::classify_focused(client, w);
+            }
             let mut s = sidecar.borrow_mut();
             s.ensure(classifier, &classifier_path)?;
             triage_scan::classify_focused(&s.client, w)
@@ -1753,6 +1794,13 @@ pub async fn run_triage_scan(
         // mode.confirm() — the resolve above refused otherwise — so the None
         // arm is a belt against a future gate bypass, not a reachable path.
         let confirm = |w: &FocusWindow, _: &FocusVerdict| -> traceloupe_core::Result<bool> {
+            // The same endpoint confirms: a second opinion from the same model
+            // is weaker than from a different one, but swapping models is a
+            // property of the LOCAL two-model design, and asking a user to
+            // configure two endpoints to get a scan is worse than accepting it.
+            if let Some(client) = &remote_client {
+                return traceloupe_core::safety_scan::guard::confirm_focused(client, w);
+            }
             let Some((spec, path)) = &confirmer else {
                 return Err(traceloupe_core::Error::Inference(
                     "no confirmer model is installed".into(),
