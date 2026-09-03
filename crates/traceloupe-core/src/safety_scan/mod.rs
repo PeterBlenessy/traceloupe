@@ -23,6 +23,7 @@ pub mod pattern_tier;
 pub mod prompt;
 pub mod reaper;
 pub mod relink;
+pub mod remote;
 pub mod router;
 pub mod scam;
 pub mod server;

@@ -243,6 +243,21 @@ export function SafetyScanView() {
     "safety-scan:cap-hours",
     null,
   );
+  // Bring your own model, configured in Settings. Read here so the scan can
+  // pass it; the acknowledgement is NOT persisted — it is asked for at the
+  // moment of starting, every time, because that is what it is consent to.
+  const [endpointEnabled] = usePersistedState(
+    "safety-scan:endpoint-enabled",
+    false,
+  );
+  const [endpointUrl] = usePersistedState("safety-scan:endpoint-url", "");
+  const [endpointModel] = usePersistedState("safety-scan:endpoint-model", "");
+  // A scan waiting on the "send to your model?" answer. Holding the arguments
+  // rather than a boolean means the dialog cannot start a DIFFERENT scan than
+  // the one the user was told about.
+  const [pendingRemoteScan, setPendingRemoteScan] = useState<
+    Parameters<typeof startTriageScan>[0] | null
+  >(null);
 
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
@@ -848,16 +863,37 @@ export function SafetyScanView() {
                           };
                           if (effectiveMode === "full") {
                             void startScan(common);
-                          } else {
-                            void startTriageScan({
-                              ...common,
-                              mode: effectiveMode,
-                              // Hours, not places to read: the core's cost
-                              // model does the conversion, so the number shown
-                              // and the number enforced cannot drift apart.
-                              budgetHours: effectiveCap,
-                            });
+                            return;
                           }
+                          const useEndpoint =
+                            endpointEnabled &&
+                            endpointUrl.trim() !== "" &&
+                            endpointModel.trim() !== "";
+                          // Asked EVERY time, and only when the server is
+                          // somewhere else: a local Ollama keeps the data on
+                          // this machine, and warning about that would teach
+                          // people to click through warnings that matter.
+                          const offMachine =
+                            useEndpoint &&
+                            !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(
+                              endpointUrl.trim(),
+                            );
+                          const args = {
+                            ...common,
+                            mode: effectiveMode,
+                            // Hours, not places to read: the core's cost
+                            // model does the conversion, so the number shown
+                            // and the number enforced cannot drift apart.
+                            budgetHours: effectiveCap,
+                            endpointUrl: useEndpoint ? endpointUrl.trim() : null,
+                            endpointModel: useEndpoint ? endpointModel.trim() : null,
+                            endpointAcknowledged: useEndpoint ? true : null,
+                          };
+                          if (offMachine) {
+                            setPendingRemoteScan(args);
+                            return;
+                          }
+                          void startTriageScan(args);
                         }}
                       >
                         <Play className="size-4" /> Start Safety Scan
@@ -968,6 +1004,82 @@ export function SafetyScanView() {
           </Card>
         )}
       </div>
+      <Dialog
+        open={pendingRemoteScan != null}
+        onOpenChange={(o) => !o && setPendingRemoteScan(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send these messages to your model?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-3 text-left">
+                <p>
+                  You've chosen to run the deep read on your own model at{" "}
+                  <span className="font-medium text-foreground">
+                    {endpointUrl.trim()}
+                  </span>
+                  . That server isn't this Mac, so some of this backup's
+                  messages will be sent to it.
+                </p>
+                <div className="rounded-md border p-3">
+                  <p className="font-medium text-foreground">What it receives</p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                    <li>
+                      The messages the pre-scan picked out — typically a small
+                      share of the backup, not all of it
+                    </li>
+                    <li>
+                      For each one, the two messages either side, so it can be
+                      understood in context
+                    </li>
+                    <li>
+                      The sender name or number, the time, and the conversation
+                      name
+                    </li>
+                  </ul>
+                  <p className="mt-2 font-medium text-foreground">
+                    What stays here
+                  </p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                    <li>Photos, attachments and files — never sent</li>
+                    <li>
+                      Everything the pre-scan didn't pick out, which is most of
+                      the backup
+                    </li>
+                    <li>The pre-scan itself, which always runs on this Mac</li>
+                  </ul>
+                </div>
+                <p>
+                  Worth knowing: the messages that get sent are the ones most
+                  likely to be sensitive — that's what the pre-scan selects for.
+                  Once they reach that server, what happens to them is up to
+                  whoever runs it, including whether they're kept or used for
+                  training. If it's a service you pay for, its terms cover this.
+                </p>
+                <p>
+                  You can turn this off any time in Settings, and run everything
+                  on this Mac instead.
+                </p>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingRemoteScan(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                const args = pendingRemoteScan;
+                setPendingRemoteScan(null);
+                if (args) void startTriageScan(args);
+              }}
+            >
+              <Play className="size-4" /> Send and scan
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {reportScan && (
         <SafetyReportDialog
           scan={reportScan}

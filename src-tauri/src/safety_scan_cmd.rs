@@ -397,6 +397,54 @@ pub async fn download_safety_scan_model(
     }
 }
 
+/// Save (or clear) the bring-your-own-model API key in the system keychain.
+///
+/// The key never goes to localStorage: it is a credential for the user's
+/// account with a provider, and the web view has no business holding it. An
+/// empty string clears it.
+#[tauri::command]
+pub fn set_endpoint_api_key(key: String) -> Result<(), String> {
+    crate::secret::store_endpoint_key(&key)
+}
+
+/// Whether an endpoint key is saved — WITHOUT returning it. The settings panel
+/// shows "saved" or "not set"; it never displays or re-reads the secret.
+#[tauri::command]
+pub fn has_endpoint_api_key() -> bool {
+    crate::secret::has_endpoint_key()
+}
+
+/// Ask a user-supplied endpoint whether it is there and can answer.
+///
+/// Sends a two-token completion with no message content — the point is to fail
+/// on a typo'd address, a wrong model name or a bad key BEFORE a scan sends
+/// anything real. The reply is discarded.
+#[tauri::command]
+pub async fn test_endpoint(
+    url: String,
+    model: String,
+    acknowledged: bool,
+) -> Result<String, String> {
+    use traceloupe_core::safety_scan::remote::RemoteEndpoint;
+    let key = crate::secret::endpoint_key();
+    let endpoint = RemoteEndpoint::new(&url, &model, key, acknowledged)
+        .map_err(|e| e.message().to_string())?;
+    let where_it_goes = if endpoint.leaves_this_machine() {
+        "reachable — note this server is not on this machine"
+    } else {
+        "reachable on this machine"
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = endpoint.client(std::time::Duration::from_secs(30));
+        client
+            .chat_text("Reply with the single word: ok", "ping", 2)
+            .map(|_| where_it_goes.to_string())
+            .map_err(|e| format!("could not reach the model: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Ensure the grooming-signal artefacts (#521) are installed, silently.
 ///
 /// Invoked by the frontend on mount: existing users already have their scan
@@ -1345,6 +1393,13 @@ fn plan_triage_scan(
     mode: Option<&str>,
     model_id: Option<&str>,
     sources: Option<&str>,
+    // True when the deep scan (and its confirmer) run on a user-supplied
+    // endpoint. The LOCAL classifier and confirmer are then not needed, and
+    // demanding their multi-gigabyte downloads would refuse exactly the scan
+    // this feature exists to enable: someone who already runs a bigger model
+    // and does not want ours. The embedder is still required — the census
+    // never leaves this machine.
+    remote_deep_scan: bool,
 ) -> Result<TriagePlan, String> {
     // An UNSTATED mode means "the product default, if it can run here": the
     // default is Balanced, but Balanced needs the optional confirmer model —
@@ -1362,10 +1417,13 @@ fn plan_triage_scan(
             // Balanced and the admission check below then refused the scan
             // outright — the default request failing instead of falling back,
             // which is exactly what this branch exists to prevent.
-            let confirmer_ready = models::confirmer()
-                .filter(|s| total_ram == 0 || total_ram >= s.ram_floor_bytes)
-                .and_then(|s| s.installed_at(dir))
-                .is_some();
+            // A remote endpoint confirms as readily as it classifies, so the
+            // default posture is available without any local helper.
+            let confirmer_ready = remote_deep_scan
+                || models::confirmer()
+                    .filter(|s| total_ram == 0 || total_ram >= s.ram_floor_bytes)
+                    .and_then(|s| s.installed_at(dir))
+                    .is_some();
             if confirmer_ready {
                 ScanMode::default()
             } else {
@@ -1399,9 +1457,13 @@ fn plan_triage_scan(
     if classifier.role != models::ModelRole::Classifier {
         return Err("that model is a scan helper, not a classifier — pick a scan model".into());
     }
-    let classifier_path = classifier
-        .installed_at(dir)
-        .ok_or("model not installed — download it first")?;
+    // With a remote deep scan the local classifier is never loaded, so its
+    // path is a placeholder rather than a requirement.
+    let classifier_path = match classifier.installed_at(dir) {
+        Some(p) => p,
+        None if remote_deep_scan => dir.join(classifier.filename),
+        None => return Err("model not installed — download it first".into()),
+    };
     let embedder = models::embedder().ok_or("the model catalog has no census embedder")?;
     let embedder_path = embedder.installed_at(dir).ok_or(
         "the Fast pre-scan model is not installed — download it from the Safety Scan settings",
@@ -1410,7 +1472,7 @@ fn plan_triage_scan(
     // that is the mode's whole meaning (it trims recall to buy precision), so
     // a missing confirmer is a clear refusal BEFORE the scan row exists, never
     // a silently skipped stage.
-    let confirmer = match mode.confirm() {
+    let confirmer = match mode.confirm() && !remote_deep_scan {
         true => {
             let spec = models::confirmer().ok_or("the model catalog has no confirmer")?;
             // Admission check NOW, not at the classifier→confirmer swap: that
@@ -1543,7 +1605,39 @@ pub async fn run_triage_scan(
     // the estimate they saw — is what keeps the promise and the enforcement
     // from drifting apart.
     budget_hours: Option<f64>,
+    // BRING YOUR OWN MODEL: an OpenAI-compatible endpoint the user runs or
+    // subscribes to (Ollama, LM Studio, vLLM, a hosted API). When set, the deep
+    // scan and its confirmer talk to it instead of the bundled sidecar. The
+    // census embedder is NOT remoted — see remote.rs for why.
+    //
+    // `endpoint_acknowledged` is the user's answer to "this sends the messages
+    // being scanned to that server". It is passed per scan rather than saved:
+    // consent to send one device's messages somewhere is not a preference that
+    // should outlive the scan it was given for.
+    endpoint_url: Option<String>,
+    endpoint_model: Option<String>,
+    endpoint_acknowledged: Option<bool>,
 ) -> Result<(), String> {
+    // Built BEFORE anything expensive: a mistyped address should fail in the
+    // dialog, not after twenty minutes of census.
+    let endpoint = match endpoint_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    {
+        Some(url) => Some(
+            traceloupe_core::safety_scan::remote::RemoteEndpoint::new(
+                url,
+                endpoint_model.as_deref().unwrap_or(""),
+                // The key comes from the keychain, never from the web view.
+                crate::secret::endpoint_key(),
+                endpoint_acknowledged.unwrap_or(false),
+            )
+            .map_err(|e| e.message().to_string())?,
+        ),
+        None => None,
+    };
+
     use traceloupe_core::safety_scan::chunker;
     use traceloupe_core::safety_scan::triage::{self, FocusWindow};
     use traceloupe_core::safety_scan::triage_scan::{self, FocusVerdict, TriageProgress};
@@ -1563,6 +1657,7 @@ pub async fn run_triage_scan(
         mode.as_deref(),
         model_id.as_deref(),
         sources.as_deref(),
+        endpoint.is_some(),
     )?;
     let TriagePlan {
         mode,
@@ -1742,7 +1837,16 @@ pub async fn run_triage_scan(
         });
 
         let embed = |t: &str| sidecar.borrow().client.embed(t);
+        // One client for the whole scan when an endpoint is configured: a
+        // remote server has no sidecar to start, no model to swap and no RAM
+        // floor to respect.
+        let remote_client = endpoint
+            .as_ref()
+            .map(|e| e.client(std::time::Duration::from_secs(180)));
         let classify = |w: &FocusWindow| {
+            if let Some(client) = &remote_client {
+                return triage_scan::classify_focused(client, w);
+            }
             let mut s = sidecar.borrow_mut();
             s.ensure(classifier, &classifier_path)?;
             triage_scan::classify_focused(&s.client, w)
@@ -1753,6 +1857,13 @@ pub async fn run_triage_scan(
         // mode.confirm() — the resolve above refused otherwise — so the None
         // arm is a belt against a future gate bypass, not a reachable path.
         let confirm = |w: &FocusWindow, _: &FocusVerdict| -> traceloupe_core::Result<bool> {
+            // The same endpoint confirms: a second opinion from the same model
+            // is weaker than from a different one, but swapping models is a
+            // property of the LOCAL two-model design, and asking a user to
+            // configure two endpoints to get a scan is worse than accepting it.
+            if let Some(client) = &remote_client {
+                return traceloupe_core::safety_scan::guard::confirm_focused(client, w);
+            }
             let Some((spec, path)) = &confirmer else {
                 return Err(traceloupe_core::Error::Inference(
                     "no confirmer model is installed".into(),
@@ -3066,12 +3177,12 @@ mod tests {
     #[test]
     fn an_unstated_mode_picks_the_best_available_posture() {
         let dir = models_dir_with(&[CLASSIFIER, EMBEDDER]);
-        let plan = plan_triage_scan(dir.path(), PLENTY_OF_RAM, None, None, None).unwrap();
+        let plan = plan_triage_scan(dir.path(), PLENTY_OF_RAM, None, None, None, false).unwrap();
         assert_eq!(plan.mode, ScanMode::Thorough, "no confirmer ⇒ Thorough");
         assert!(plan.confirmer.is_none());
 
         let dir = models_dir_with(&[CLASSIFIER, EMBEDDER, CONFIRMER]);
-        let plan = plan_triage_scan(dir.path(), PLENTY_OF_RAM, None, None, None).unwrap();
+        let plan = plan_triage_scan(dir.path(), PLENTY_OF_RAM, None, None, None, false).unwrap();
         assert_eq!(
             plan.mode,
             ScanMode::default(),
@@ -3085,7 +3196,7 @@ mod tests {
         let floor = models::confirmer().unwrap().ram_floor_bytes;
         // Classifier pinned: below the floor, RAM-based resolution would pick
         // the E2B tier and report ITS absence, masking the branch under test.
-        let plan = plan_triage_scan(dir.path(), floor - 1, None, Some(CLASSIFIER), None)
+        let plan = plan_triage_scan(dir.path(), floor - 1, None, Some(CLASSIFIER), None, false)
             .expect("an unstated mode must never be refused for the confirmer's sake");
         assert_eq!(plan.mode, ScanMode::Thorough);
         assert!(plan.confirmer.is_none());
@@ -3097,8 +3208,8 @@ mod tests {
     fn an_explicit_confirm_mode_is_refused_without_the_confirmer() {
         let dir = models_dir_with(&[CLASSIFIER, EMBEDDER]);
         for mode in ["balanced", "precise"] {
-            let err =
-                plan_triage_scan(dir.path(), PLENTY_OF_RAM, Some(mode), None, None).unwrap_err();
+            let err = plan_triage_scan(dir.path(), PLENTY_OF_RAM, Some(mode), None, None, false)
+                .unwrap_err();
             assert!(
                 err.contains("Finding checker") && err.contains("not installed"),
                 "{mode}: must name the model and say it is missing, got: {err}"
@@ -3117,8 +3228,16 @@ mod tests {
         // left to RAM, a low-memory machine resolves to the E2B tier first and
         // reports that model's absence instead (correct precedence — a scan
         // needs a classifier at all — but not the branch under test).
-        let plan =
-            |ram: u64| plan_triage_scan(dir.path(), ram, Some("balanced"), Some(CLASSIFIER), None);
+        let plan = |ram: u64| {
+            plan_triage_scan(
+                dir.path(),
+                ram,
+                Some("balanced"),
+                Some(CLASSIFIER),
+                None,
+                false,
+            )
+        };
         let err = plan(floor - 1).unwrap_err();
         assert!(err.contains("memory"), "got: {err}");
         // Unknown RAM (0) must not refuse — the check is a floor, not a guess.
@@ -3133,7 +3252,14 @@ mod tests {
     fn scope_handling_refuses_notes_only_and_strips_notes_elsewhere() {
         let dir = models_dir_with(&[CLASSIFIER, EMBEDDER]);
         let plan = |sources: Option<&str>| {
-            plan_triage_scan(dir.path(), PLENTY_OF_RAM, Some("thorough"), None, sources)
+            plan_triage_scan(
+                dir.path(),
+                PLENTY_OF_RAM,
+                Some("thorough"),
+                None,
+                sources,
+                false,
+            )
         };
         let err = plan(Some("notes")).unwrap_err();
         assert!(err.contains("reads messages"), "got: {err}");
@@ -3155,6 +3281,47 @@ mod tests {
         );
     }
 
+    /// A scan pointed at the user's OWN model must not demand ours.
+    ///
+    /// This is the case the feature exists for: someone who already runs a
+    /// bigger model and does not want a multi-gigabyte download of one they
+    /// will never load. Before this was fixed, such a scan was refused with
+    /// "model not installed — download it first", which defeated the point.
+    /// The embedder is still required: the census never leaves this machine.
+    #[test]
+    fn a_scan_on_your_own_model_does_not_demand_ours() {
+        // Only the census embedder is installed — no classifier, no confirmer.
+        let dir = models_dir_with(&[EMBEDDER]);
+
+        let refused = plan_triage_scan(dir.path(), PLENTY_OF_RAM, None, None, None, false);
+        assert!(
+            refused.is_err(),
+            "without an endpoint the local classifier is still required"
+        );
+
+        let plan = plan_triage_scan(dir.path(), PLENTY_OF_RAM, None, None, None, true)
+            .expect("a remote deep scan needs no local classifier");
+        // And the default posture is the confirming one, because a remote
+        // endpoint confirms as readily as it classifies.
+        assert_eq!(plan.mode, ScanMode::Balanced);
+        assert!(
+            plan.confirmer.is_none(),
+            "no LOCAL confirmer is loaded for a remote scan"
+        );
+    }
+
+    /// The census is not remoted, so its model is required either way — a
+    /// remote endpoint must not paper over a missing embedder.
+    #[test]
+    fn the_census_embedder_is_required_even_with_your_own_model() {
+        let dir = models_dir_with(&[]);
+        let err = plan_triage_scan(dir.path(), PLENTY_OF_RAM, None, None, None, true).unwrap_err();
+        assert!(
+            err.contains("pre-scan"),
+            "the refusal must name the embedder: {err}"
+        );
+    }
+
     /// A helper model is not a scan model: picking one must be refused rather
     /// than spawned as a classifier.
     #[test]
@@ -3167,6 +3334,7 @@ mod tests {
                 Some("thorough"),
                 Some(helper),
                 None,
+                false,
             )
             .unwrap_err();
             assert!(err.contains("not a classifier"), "{helper}: got: {err}");
@@ -3176,7 +3344,8 @@ mod tests {
             PLENTY_OF_RAM,
             Some("thorough"),
             Some("no-such-model"),
-            None
+            None,
+            false,
         )
         .unwrap_err()
         .contains("unknown model id"));
@@ -3187,13 +3356,27 @@ mod tests {
     #[test]
     fn a_missing_embedder_is_refused_by_name() {
         let dir = models_dir_with(&[CLASSIFIER]);
-        let err =
-            plan_triage_scan(dir.path(), PLENTY_OF_RAM, Some("thorough"), None, None).unwrap_err();
+        let err = plan_triage_scan(
+            dir.path(),
+            PLENTY_OF_RAM,
+            Some("thorough"),
+            None,
+            None,
+            false,
+        )
+        .unwrap_err();
         assert!(err.contains("Fast pre-scan"), "got: {err}");
         // …and the classifier's own absence is reported as its own problem.
         let empty = tempfile::tempdir().unwrap();
-        let err = plan_triage_scan(empty.path(), PLENTY_OF_RAM, Some("thorough"), None, None)
-            .unwrap_err();
+        let err = plan_triage_scan(
+            empty.path(),
+            PLENTY_OF_RAM,
+            Some("thorough"),
+            None,
+            None,
+            false,
+        )
+        .unwrap_err();
         assert!(err.contains("model not installed"), "got: {err}");
     }
 

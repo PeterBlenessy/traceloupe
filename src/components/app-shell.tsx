@@ -83,6 +83,7 @@ import { useTheme, type Theme } from "@/components/theme-provider";
 import { ImportProvider } from "@/components/import-provider";
 import { SafetyScanProvider } from "@/components/safety-scan-provider";
 import { SafetyModelSettings } from "@/components/safety-model-settings";
+import { EndpointSettings } from "@/components/endpoint-settings";
 import { SecuritySettings } from "@/components/security-settings";
 import { ReimportProvider, useReimport } from "@/components/reimport-provider";
 import { client, type LogLevel } from "@/lib/ipc";
@@ -1093,6 +1094,14 @@ function SettingsMenu() {
             >
               <div className="p-3">
                 <SafetyModelSettings />
+              </div>
+            </SettingsGroup>
+            <SettingsGroup
+              title="Your own model"
+              description="Point the deep scan at a model you run yourself. The pre-scan always stays on this device."
+            >
+              <div className="p-3">
+                <EndpointSettings />
               </div>
             </SettingsGroup>
             <SettingsGroup
