@@ -59,10 +59,10 @@ export function EndpointSettings() {
             <Server className="size-4" /> Use your own model
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Send the deep scan to a model you run — Ollama, LM Studio, vLLM, or
-            a hosted API — instead of the built-in one. The pre-scan always stays
-            on this device, so at most the small share of messages the scan picks
-            out is ever sent.
+            Run the deep read on a model you choose — Ollama, LM Studio, vLLM or
+            a hosted API — instead of the built-in one. Useful if you already run
+            something larger and want its judgement, or a faster machine to run
+            it on.
           </p>
         </div>
         <Tooltip>
@@ -137,14 +137,31 @@ export function EndpointSettings() {
             </div>
           </div>
 
-          {remote && (
-            <p className="rounded-md border border-status-warn-border bg-status-warn-bg p-2 text-xs text-status-warn-text">
-              This server is not on this machine. The messages the scan reads in
-              depth will be sent to it, and what happens to them there is
-              governed by whoever runs it. You will be asked to confirm each time
-              you start a scan.
+          <div className="rounded-md border p-3 text-xs">
+            <p className="font-medium">What your model would receive</p>
+            <p className="mt-1 text-muted-foreground">
+              The messages the pre-scan picks out — usually a small share of a
+              backup — each with the two messages either side for context, the
+              sender, the time and the conversation name. Photos and attachments
+              are never sent, and neither is anything the pre-scan didn't pick
+              out. The pre-scan itself always runs on this Mac.
             </p>
-          )}
+            {remote ? (
+              <p className="mt-2">
+                Because this address isn't on this Mac, those messages leave the
+                device. They're also the ones most likely to be sensitive, since
+                that's what the pre-scan selects for — so it's worth being
+                comfortable with whoever runs that server, and with their terms
+                on keeping or training on what they receive. You'll be asked to
+                confirm each time you start a scan, and you can switch back to
+                the built-in model whenever you like.
+              </p>
+            ) : (
+              <p className="mt-2 text-muted-foreground">
+                This address is on this Mac, so nothing leaves the device.
+              </p>
+            )}
+          </div>
 
           <div className="flex items-center gap-2">
             <Tooltip>
