@@ -72,6 +72,8 @@ pub struct TriageOutcome {
     pub patterns_flagged: usize,
     /// Threads the scam tier flagged (#539).
     pub scam_flagged: usize,
+    /// Threads the hate tier flagged.
+    pub hate_flagged: usize,
     /// Threads where the head pass errored (audited, skipped).
     pub heads_failed: usize,
     /// Threads the router promoted into the worklist — the census had kept
@@ -718,9 +720,11 @@ where
         }
     }
     // --- phase 3.55: the scam tier (#539) ---
-    // A 537 KB embedded classifier: no model download, no ML runtime, and
-    // microseconds per message, so like the pattern tier it runs on every
-    // scan unconditionally. It reads every message the census REJECTED — the
+    // Structural RULES, not a classifier — the classifier was measured,
+    // shipped and then reverted when it flagged 21 of 25 ordinary bank and
+    // delivery messages (see scam.rs). No download, no ML runtime, nanoseconds
+    // per message, so like the pattern tier it runs on every scan
+    // unconditionally. It reads every message the census REJECTED — the
     // census scores against harm prototypes, and scam text is structurally
     // unlike them, so this is precisely the recall the embedding cut loses.
     // Measured: 46% of real held-out smishing caught, and 0 of 25 legitimate
@@ -783,6 +787,77 @@ where
                         // recipient acted: severity 2.
                         severity: 2,
                         rationale: format!("Matches known scam patterns — {why}."),
+                    },
+                    true,
+                ));
+            }
+        }
+    }
+
+    // --- phase 3.57: the hate / identity-attack tier ---
+    // Word weights compiled into the binary: no download, microseconds per
+    // message. Like the scam tier it reads what the census REJECTED, which is
+    // where the embedding cut loses this kind of harm.
+    //
+    // What it finds is EXPLICIT hate. Implied hate ("people like you should
+    // not be allowed in this country") scores 0.38 against a 0.978 cut, and a
+    // ModernBERT trained on the same corpus missed the same lines — the limit
+    // is the corpus, not the model class, and the coverage report says so.
+    if !out.cancelled {
+        use crate::safety_scan::hate;
+        let kept = &pre_budget_ids;
+        // Threads the deep scan already judged hateful: its verdict carries a
+        // rationale, so it outranks this one rather than duplicating it.
+        let text_flagged: std::collections::HashSet<String> = provisional
+            .iter()
+            .filter(|(_, v, _)| v.category == Category::HateIdentity)
+            .map(|(w, _, _)| w.items[w.focus].thread_identifier.clone())
+            .collect();
+        let tier = hate::shipped();
+        for thread in threads.iter() {
+            if cancel.is_cancelled() {
+                out.cancelled = true;
+                break;
+            }
+            if thread
+                .first()
+                .is_some_and(|m| text_flagged.contains(&m.thread_identifier))
+            {
+                continue;
+            }
+            // NOTE the difference from the scam tier: outgoing messages are
+            // NOT skipped. A scam finding names something the owner received,
+            // but hate sent FROM this device is exactly what a parent
+            // reviewing a child's phone, or an investigator, needs to see.
+            let mut best: Option<(usize, f32)> = None;
+            for (mi, m) in thread.iter().enumerate() {
+                if kept.contains(&m.source_id) {
+                    continue;
+                }
+                let Some(strength) = tier.strength(&m.text) else {
+                    continue;
+                };
+                if best.is_none_or(|(_, b)| strength > b) {
+                    best = Some((mi, strength));
+                }
+            }
+            if let Some((mi, _)) = best {
+                out.hate_flagged += 1;
+                let window = triage::context_window(thread, mi, ScanMode::default_radius());
+                let outgoing = thread[mi].sender == "me";
+                provisional.push((
+                    window,
+                    FocusVerdict {
+                        category: Category::HateIdentity,
+                        // An attack on someone for who they are, with no
+                        // evidence here of escalation or a threat: severity 2.
+                        severity: 2,
+                        rationale: if outgoing {
+                            "Explicit attack on a person's identity, sent from this device."
+                                .to_string()
+                        } else {
+                            "Explicit attack on a person's identity.".to_string()
+                        },
                     },
                     true,
                 ));
@@ -1006,7 +1081,7 @@ where
         now,
         "triage_deep_scan",
         &format!(
-            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={} heads_flagged={} heads_failed={} patterns_flagged={} scam_flagged={} routed_promoted={} router_failed={}",
+            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={} heads_flagged={} heads_failed={} patterns_flagged={} scam_flagged={} hate_flagged={} routed_promoted={} router_failed={}",
             out.deep_scanned,
             out.findings,
             out.rejected,
@@ -1021,6 +1096,7 @@ where
             out.heads_failed,
             out.patterns_flagged,
             out.scam_flagged,
+            out.hate_flagged,
             out.routed_promoted,
             out.router_failed
         ),
@@ -1669,6 +1745,115 @@ mod tests {
             "the router's promotions must be countable from the audit line: {line}"
         );
         assert!(line.contains("router_failed=0"), "{line}");
+    }
+
+    /// The hate tier at engine level: a message the census rejected still
+    /// becomes a hate finding, ordinary identity talk does not, and one
+    /// abusive thread yields ONE finding rather than one per message.
+    #[test]
+    fn hate_the_census_missed_becomes_one_finding() {
+        // A line the tier actually FIRES on: the tier runs at a precision-first
+        // cut and detects roughly 28% of real hate, so "the first line of the
+        // file" is usually one of the 72% it does not — which is what the first
+        // draft of this test asserted against, and it failed on a working tier.
+        let Some(line) = hate_smoke_line() else {
+            eprintln!("skipped: needs TRACELOUPE_HATE_SMOKE (real text stays out of the repo)");
+            return;
+        };
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![
+            vec![
+                msg_at(1, "them", &line, 1000),
+                msg_at(2, "them", &line, 2000), // same abuse again
+            ],
+            vec![
+                msg_at(3, "them", "picking mum up from the mosque at 2", 3000),
+                msg_at(4, "me", "ok see you at 2", 3100),
+            ],
+        ];
+        let embed = |_: &str| Ok(vec![0.0, 1.0]); // census keeps nothing
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> { unreachable!() };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> {
+            panic!("conversation-level verdicts never meet the confirmer")
+        };
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Thorough,
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(None),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.hate_flagged, 1, "one thread, one finding");
+        let rows = db.list_findings(Some(scan)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].category, Category::HateIdentity);
+    }
+
+    /// Hate sent FROM the device is a finding too — the opposite of the scam
+    /// tier's rule, and deliberately so: a parent reviewing a child's phone
+    /// needs to see what was sent, not only what arrived.
+    #[test]
+    fn hate_sent_from_this_device_is_still_a_finding() {
+        // A line the tier actually FIRES on: the tier runs at a precision-first
+        // cut and detects roughly 28% of real hate, so "the first line of the
+        // file" is usually one of the 72% it does not — which is what the first
+        // draft of this test asserted against, and it failed on a working tier.
+        let Some(line) = hate_smoke_line() else {
+            eprintln!("skipped: needs TRACELOUPE_HATE_SMOKE");
+            return;
+        };
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![vec![msg_at(1, "me", &line, 1000)]];
+        let embed = |_: &str| Ok(vec![0.0, 1.0]);
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> { unreachable!() };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> { Ok(true) };
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Thorough,
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(None),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.hate_flagged, 1);
+        let rows = db.list_findings(Some(scan)).unwrap();
+        assert!(rows[0].rationale.contains("sent from this device"));
+    }
+
+    /// One line from the out-of-repo smoke file that the hate tier detects.
+    /// Returns None when the file is absent, which skips the test.
+    fn hate_smoke_line() -> Option<String> {
+        let path = std::env::var("TRACELOUPE_HATE_SMOKE").ok()?;
+        let raw = std::fs::read_to_string(path).ok()?;
+        let tier = crate::safety_scan::hate::shipped();
+        raw.lines()
+            .find(|l| !l.trim().is_empty() && tier.is_hate(l))
+            .map(str::to_string)
     }
 
     fn msg_at(id: i64, sender: &str, text: &str, at: i64) -> CensusInput {

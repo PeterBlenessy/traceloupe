@@ -65,10 +65,19 @@ impl HateTier {
     /// Deliberately a boolean: the score is calibrated for one operating point
     /// and nothing downstream should invent a second one from it.
     pub fn is_hate(&self, text: &str) -> bool {
+        self.strength(text).is_some()
+    }
+
+    /// The score, but ONLY for messages already over the cut — for choosing
+    /// which message in a thread to anchor a finding on. A marginal early hit
+    /// must not outrank a blatant later one (#540 finding 5). Not a second
+    /// threshold: callers may compare these to each other, never to a constant.
+    pub fn strength(&self, text: &str) -> Option<f32> {
         if text.split_whitespace().count() < MIN_WORDS {
-            return false;
+            return None;
         }
-        self.model.score(text) >= self.threshold
+        let s = self.model.score(text);
+        (s >= self.threshold).then_some(s)
     }
 }
 
