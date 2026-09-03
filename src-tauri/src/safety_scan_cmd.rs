@@ -397,6 +397,54 @@ pub async fn download_safety_scan_model(
     }
 }
 
+/// Save (or clear) the bring-your-own-model API key in the system keychain.
+///
+/// The key never goes to localStorage: it is a credential for the user's
+/// account with a provider, and the web view has no business holding it. An
+/// empty string clears it.
+#[tauri::command]
+pub fn set_endpoint_api_key(key: String) -> Result<(), String> {
+    crate::secret::store_endpoint_key(&key)
+}
+
+/// Whether an endpoint key is saved — WITHOUT returning it. The settings panel
+/// shows "saved" or "not set"; it never displays or re-reads the secret.
+#[tauri::command]
+pub fn has_endpoint_api_key() -> bool {
+    crate::secret::has_endpoint_key()
+}
+
+/// Ask a user-supplied endpoint whether it is there and can answer.
+///
+/// Sends a two-token completion with no message content — the point is to fail
+/// on a typo'd address, a wrong model name or a bad key BEFORE a scan sends
+/// anything real. The reply is discarded.
+#[tauri::command]
+pub async fn test_endpoint(
+    url: String,
+    model: String,
+    acknowledged: bool,
+) -> Result<String, String> {
+    use traceloupe_core::safety_scan::remote::RemoteEndpoint;
+    let key = crate::secret::endpoint_key();
+    let endpoint = RemoteEndpoint::new(&url, &model, key, acknowledged)
+        .map_err(|e| e.message().to_string())?;
+    let where_it_goes = if endpoint.leaves_this_machine() {
+        "reachable — note this server is not on this machine"
+    } else {
+        "reachable on this machine"
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = endpoint.client(std::time::Duration::from_secs(30));
+        client
+            .chat_text("Reply with the single word: ok", "ping", 2)
+            .map(|_| where_it_goes.to_string())
+            .map_err(|e| format!("could not reach the model: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Ensure the grooming-signal artefacts (#521) are installed, silently.
 ///
 /// Invoked by the frontend on mount: existing users already have their scan
@@ -1554,7 +1602,6 @@ pub async fn run_triage_scan(
     // should outlive the scan it was given for.
     endpoint_url: Option<String>,
     endpoint_model: Option<String>,
-    endpoint_api_key: Option<String>,
     endpoint_acknowledged: Option<bool>,
 ) -> Result<(), String> {
     // Built BEFORE anything expensive: a mistyped address should fail in the
@@ -1568,7 +1615,8 @@ pub async fn run_triage_scan(
             traceloupe_core::safety_scan::remote::RemoteEndpoint::new(
                 url,
                 endpoint_model.as_deref().unwrap_or(""),
-                endpoint_api_key.clone(),
+                // The key comes from the keychain, never from the web view.
+                crate::secret::endpoint_key(),
                 endpoint_acknowledged.unwrap_or(false),
             )
             .map_err(|e| e.message().to_string())?,

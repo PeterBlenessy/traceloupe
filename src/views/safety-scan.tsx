@@ -243,6 +243,15 @@ export function SafetyScanView() {
     "safety-scan:cap-hours",
     null,
   );
+  // Bring your own model, configured in Settings. Read here so the scan can
+  // pass it; the acknowledgement is NOT persisted — it is asked for at the
+  // moment of starting, every time, because that is what it is consent to.
+  const [endpointEnabled] = usePersistedState(
+    "safety-scan:endpoint-enabled",
+    false,
+  );
+  const [endpointUrl] = usePersistedState("safety-scan:endpoint-url", "");
+  const [endpointModel] = usePersistedState("safety-scan:endpoint-model", "");
 
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
@@ -848,16 +857,40 @@ export function SafetyScanView() {
                           };
                           if (effectiveMode === "full") {
                             void startScan(common);
-                          } else {
-                            void startTriageScan({
-                              ...common,
-                              mode: effectiveMode,
-                              // Hours, not places to read: the core's cost
-                              // model does the conversion, so the number shown
-                              // and the number enforced cannot drift apart.
-                              budgetHours: effectiveCap,
-                            });
+                            return;
                           }
+                          const useEndpoint =
+                            endpointEnabled &&
+                            endpointUrl.trim() !== "" &&
+                            endpointModel.trim() !== "";
+                          // Asked EVERY time, and only when the server is
+                          // somewhere else: a local Ollama keeps the data on
+                          // this machine, and warning about that would teach
+                          // people to click through warnings that matter.
+                          const offMachine =
+                            useEndpoint &&
+                            !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(
+                              endpointUrl.trim(),
+                            );
+                          if (
+                            offMachine &&
+                            !window.confirm(
+                              `The messages this scan reads in depth will be sent to ${endpointUrl.trim()}. Continue?`,
+                            )
+                          ) {
+                            return;
+                          }
+                          void startTriageScan({
+                            ...common,
+                            mode: effectiveMode,
+                            // Hours, not places to read: the core's cost
+                            // model does the conversion, so the number shown
+                            // and the number enforced cannot drift apart.
+                            budgetHours: effectiveCap,
+                            endpointUrl: useEndpoint ? endpointUrl.trim() : null,
+                            endpointModel: useEndpoint ? endpointModel.trim() : null,
+                            endpointAcknowledged: useEndpoint ? true : null,
+                          });
                         }}
                       >
                         <Play className="size-4" /> Start Safety Scan

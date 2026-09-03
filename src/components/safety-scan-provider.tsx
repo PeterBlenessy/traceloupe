@@ -45,6 +45,12 @@ type SafetyScanContextValue = {
     /** Wall-clock cap on the deep scan, in hours; null reads every candidate.
      *  Whatever it does not reach is reported unscanned, never "clean". */
     budgetHours?: number | null;
+    /** Bring your own model: an OpenAI-compatible endpoint for the deep scan.
+     *  `endpointAcknowledged` is the user's per-scan confirmation that message
+     *  text will be sent there; the backend refuses the endpoint without it. */
+    endpointUrl?: string | null;
+    endpointModel?: string | null;
+    endpointAcknowledged?: boolean | null;
   }) => Promise<void>;
   /** The last completed triage scan's coverage numbers — the honest "N of M
    *  candidates deep-scanned" line. The triageDone event is terminal (it
@@ -253,6 +259,13 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     rangeStart?: number | null;
     rangeEnd?: number | null;
     sources?: string | null;
+    budgetHours?: number | null;
+    /** Bring your own model: an OpenAI-compatible endpoint for the deep scan.
+     *  `endpointAcknowledged` is the user's per-scan confirmation that message
+     *  text will be sent there; the backend refuses the endpoint without it. */
+    endpointUrl?: string | null;
+    endpointModel?: string | null;
+    endpointAcknowledged?: boolean | null;
   }) => {
     setScan({ phase: "loading" });
     setLastTriageDone(null);

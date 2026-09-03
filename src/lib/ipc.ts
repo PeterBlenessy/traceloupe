@@ -1584,6 +1584,19 @@ export interface TraceLoupeClient {
    *  refuses balanced/precise when the Finding checker model is missing, and
    *  notes-only scopes (triage reads messages). No resume: the census is
    *  incremental, so a new scan loses nothing. */
+  /** Save (or clear, with "") the deep-scan endpoint's API key in the system
+   *  keychain. The key never enters localStorage or this web view again. */
+  setEndpointApiKey(key: string): Promise<void>;
+  /** Whether a key is saved — the secret itself is never returned. */
+  hasEndpointApiKey(): Promise<boolean>;
+  /** Ask the endpoint whether it is reachable and can answer, sending no
+   *  message content. Resolves with a short human-readable status; rejects
+   *  with the reason it failed. */
+  testEndpoint(opts: {
+    url: string;
+    model: string;
+    acknowledged: boolean;
+  }): Promise<string>;
   runTriageScan(opts: {
     modelId?: string | null;
     /** Scan posture; null lets the backend pick the best available mode. */
@@ -1601,7 +1614,6 @@ export interface TraceLoupeClient {
      *  router selects is ever sent. */
     endpointUrl?: string | null;
     endpointModel?: string | null;
-    endpointApiKey?: string | null;
     /** The user's answer to "this sends the messages being scanned to that
      *  server". The backend REFUSES to build an endpoint without it, and it is
      *  passed per scan rather than stored — consent to send one device's
@@ -2313,6 +2325,14 @@ const tauriClient: TraceLoupeClient = {
   downloadSafetyScanModel: (modelId) =>
     invoke("download_safety_scan_model", { modelId }),
   ensureGroomingArtefacts: () => invoke<boolean>("ensure_grooming_artefacts"),
+  setEndpointApiKey: (key) => invoke("set_endpoint_api_key", { key }),
+  hasEndpointApiKey: () => invoke<boolean>("has_endpoint_api_key"),
+  testEndpoint: (opts) =>
+    invoke<string>("test_endpoint", {
+      url: opts.url,
+      model: opts.model,
+      acknowledged: opts.acknowledged,
+    }),
   getSafetyScanDownloadStatus: () =>
     invoke<SafetyModelDownloadStatus | null>("get_safety_scan_download_status"),
   cancelSafetyScanModelDownload: () =>
@@ -2344,7 +2364,6 @@ const tauriClient: TraceLoupeClient = {
       budgetHours: opts.budgetHours ?? null,
       endpointUrl: opts.endpointUrl ?? null,
       endpointModel: opts.endpointModel ?? null,
-      endpointApiKey: opts.endpointApiKey ?? null,
       endpointAcknowledged: opts.endpointAcknowledged ?? null,
     }),
   estimateTriageScan: (opts) =>
@@ -3717,6 +3736,7 @@ const mockFindings: Finding[] = [
 
 let mockSuppressions: Suppression[] = [];
 let mockActive = false;
+let mockEndpointKey = "";
 const mockImported = new Set<string>();
 // Scan-history rows the browser mock has "deleted", so delete + re-list behaves.
 const mockDeletedScanIds = new Set<number>();
@@ -7096,6 +7116,27 @@ const mockClient: TraceLoupeClient = {
   },
   runTriageScan: async () => {
     if (!mockActive) throw new Error("no backup is open");
+  },
+  // The browser harness has no keychain and no network: the key is remembered
+  // for the session only, and the reachability test answers for a made-up
+  // server so the settings UI can be exercised without one.
+  setEndpointApiKey: async (key) => {
+    mockEndpointKey = key.trim();
+  },
+  hasEndpointApiKey: async () => mockEndpointKey.length > 0,
+  testEndpoint: async (opts) => {
+    if (!opts.acknowledged) {
+      throw new Error(
+        "sending message text to another server needs your explicit confirmation",
+      );
+    }
+    if (!/^https?:\/\//.test(opts.url)) {
+      throw new Error("the address must start with http:// or https://");
+    }
+    if (!opts.model.trim()) throw new Error("enter the model name your server expects");
+    return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(opts.url)
+      ? "reachable on this machine"
+      : "reachable — note this server is not on this machine";
   },
   estimateTriageScan: async () => {
     if (!mockActive) throw new Error("no backup is open");
