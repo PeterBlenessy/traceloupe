@@ -240,10 +240,24 @@ impl LlmClient {
         if let Some(key) = &self.api_key {
             req = req.set("Authorization", &format!("Bearer {key}"));
         }
+        let who = match self.dialect {
+            Dialect::LlamaCpp => "llama-server",
+            Dialect::OpenAi => "your model server",
+        };
         let resp = req.send_string(&body.to_string()).map_err(|e| match e {
-            ureq::Error::Status(code, _) => {
-                Error::Inference(format!("llama-server returned HTTP {code}"))
-            }
+            // Status and transport KIND only — never a body, which on these
+            // endpoints can echo prompt content, and never the key (ADR 0002).
+            // 401/403 is named because for a user-supplied endpoint it is
+            // almost always the API key, and "HTTP 401" alone sends people
+            // hunting the wrong problem.
+            ureq::Error::Status(code @ (401 | 403), _) => Error::Inference(format!(
+                "{who} refused the request (HTTP {code}) — check the API key"
+            )),
+            ureq::Error::Status(404, _) => Error::Inference(format!(
+                "{who} has no such endpoint (HTTP 404) — check the address ends where the \
+                 API starts, often /v1"
+            )),
+            ureq::Error::Status(code, _) => Error::Inference(format!("{who} returned HTTP {code}")),
             ureq::Error::Transport(t) => Error::Inference(format!("transport: {}", t.kind())),
         })?;
         resp.into_string()
