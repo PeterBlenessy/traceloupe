@@ -30,6 +30,23 @@ TraceLoupe's data parsers follow the parser-provenance rules in
 No parsers are currently ported — all are clean-room "reference" implementations,
 so there are no port entries.
 
+## Training data for shipped models (attribution required)
+
+Two tiers ship weights derived from public corpora. No corpus text is
+distributed — only per-term weights or model parameters — but the licences
+below require attribution, and this section is that attribution.
+
+- **UC Berkeley D-Lab — "Measuring Hate Speech"** — CC BY 4.0 —
+  https://huggingface.co/datasets/ucberkeley-dlab/measuring-hate-speech
+  Kennedy, Bahrami, Atari, Mostafazadeh Davani, Hoover, Omrani, Graham, Dehghani.
+  The hate/identity tier's term weights are trained on this corpus.
+  Licence: https://creativecommons.org/licenses/by/4.0/
+
+- **Reddit C-SSRS Suicide Dataset** (Gaur et al., Zenodo 2667859) — CC BY 4.0 —
+  https://doi.org/10.5281/zenodo.2667859
+  Contributes the self-harm half of the deep-scan router's term weights.
+  Licence: https://creativecommons.org/licenses/by/4.0/
+
 ## Rust (application core)
 
 - **Tauri** and plugins — MIT OR Apache-2.0 — https://tauri.app
