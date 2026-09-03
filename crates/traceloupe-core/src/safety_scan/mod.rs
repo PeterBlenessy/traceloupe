@@ -15,6 +15,8 @@ pub mod engine;
 pub mod eval;
 pub mod grooming_onnx;
 pub mod guard;
+pub mod hate;
+pub mod lexical;
 pub mod models;
 pub mod pattern_tier;
 pub mod prompt;

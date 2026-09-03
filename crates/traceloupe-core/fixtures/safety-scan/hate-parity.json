@@ -1,0 +1,52 @@
+{
+ "_comment": [
+  "Parity fixture for the Rust reimplementation of the hate tier's",
+  "transform. Texts are chosen to prove the arithmetic — accents,",
+  "casing, an empty string, ordinary messages — and the two hateful",
+  "lines contain no slurs, because this fixture ships in a public",
+  "repository. `score` is scikit-learn's own probability."
+ ],
+ "threshold": 0.9781299727431236,
+ "cases": [
+  {
+   "text": "picking mum up from the mosque at 2",
+   "score": 0.221336
+  },
+  {
+   "text": "people like you should not be allowed in this country",
+   "score": 0.380003
+  },
+  {
+   "text": "hey bitches, brunch sunday??",
+   "score": 0.865958
+  },
+  {
+   "text": "nans dementia is worse, she called me by my mums name again",
+   "score": 0.093689
+  },
+  {
+   "text": "café renové — naïve façade",
+   "score": 0.24346
+  },
+  {
+   "text": "",
+   "score": 0.235079
+  },
+  {
+   "text": "u ok?",
+   "score": 0.048708
+  },
+  {
+   "text": "the polish shop on the corner has the good bread",
+   "score": 0.194414
+  },
+  {
+   "text": "they are all the same, every single one of them, vermin",
+   "score": 0.784043
+  },
+  {
+   "text": "quoting the song is not me saying it, you know the line i mean",
+   "score": 0.016253
+  }
+ ]
+}

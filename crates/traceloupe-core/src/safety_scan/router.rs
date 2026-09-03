@@ -41,13 +41,11 @@
 //! * **No threshold.** Everything is expressed as a rank, so the tier cannot
 //!   acquire a hidden decision boundary that nobody re-measures.
 
-use std::collections::HashMap;
 use std::sync::OnceLock;
-
-use serde::Deserialize;
 
 use super::chunker::ChunkItem;
 use super::grooming_onnx::{render_window, WINDOW_MESSAGES};
+use super::lexical::LexicalModel;
 
 /// Share of a phone's threads the router may PROMOTE — threads the census kept
 /// nothing from, which would otherwise never be deep-scanned however they rank.
@@ -60,111 +58,24 @@ pub const PROMOTE_TOP_SHARE: f64 = 0.05;
 /// weights only — no corpus text, which PAN12's terms forbid redistributing.
 const MODEL_JSON: &str = include_str!("../../fixtures/safety-scan/router-lexical.json");
 
-#[derive(Deserialize)]
-struct RawTerm {
-    t: String,
-    idf: f32,
-    w: f32,
-}
-
-#[derive(Deserialize)]
-struct RawModel {
-    intercept: f32,
-    terms: Vec<RawTerm>,
-}
-
 pub struct LexicalRouter {
-    /// term -> (idf, weight). Both 1-grams and 2-grams; a 2-gram is its two
-    /// tokens joined by one space, as scikit-learn writes them.
-    terms: HashMap<String, (f32, f32)>,
-    intercept: f32,
+    model: LexicalModel,
 }
 
 /// The shipped model, parsed once. ~43k terms; parsing is milliseconds and
 /// happens on the first scan, not at startup.
 pub fn shipped() -> &'static LexicalRouter {
     static MODEL: OnceLock<LexicalRouter> = OnceLock::new();
-    MODEL.get_or_init(|| {
-        let raw: RawModel = serde_json::from_str(MODEL_JSON)
-            .expect("the router model ships with the binary; a parse failure is a build error");
-        LexicalRouter {
-            terms: raw.terms.into_iter().map(|t| (t.t, (t.idf, t.w))).collect(),
-            intercept: raw.intercept,
-        }
+    MODEL.get_or_init(|| LexicalRouter {
+        model: LexicalModel::from_json(MODEL_JSON),
     })
-}
-
-/// scikit-learn's preprocessing, in order: lowercase, THEN strip accents
-/// (NFKD, drop combining marks). The order matters — reversing it changes the
-/// tokens for some scripts — and the parity fixture covers it.
-fn normalise(text: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
-    text.to_lowercase()
-        .nfkd()
-        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
-        .collect()
-}
-
-/// `(?u)\b\w\w+\b`: maximal runs of word characters, keeping those of two or
-/// more. `\w` is alphanumeric or underscore — after NFKD stripping there are no
-/// combining marks left to consider.
-fn tokenize(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    for c in text.chars() {
-        if c.is_alphanumeric() || c == '_' {
-            cur.push(c);
-        } else if cur.chars().count() >= 2 {
-            out.push(std::mem::take(&mut cur));
-        } else {
-            cur.clear();
-        }
-    }
-    if cur.chars().count() >= 2 {
-        out.push(cur);
-    }
-    out
 }
 
 impl LexicalRouter {
     /// One text's score in [0, 1]. Used only to ORDER, never compared to a
-    /// constant.
-    ///
-    /// tf-idf exactly as scikit-learn computes it for this configuration:
-    /// sublinear tf (`1 + ln(count)`), multiplied by the trained idf,
-    /// l2-normalised over the terms present, then the logistic link. Terms
-    /// outside the vocabulary are dropped BEFORE the norm, which is what
-    /// scikit-learn does and is load-bearing for parity.
+    /// constant — see `lexical::LexicalModel` for the transform itself.
     pub fn score(&self, text: &str) -> f32 {
-        let toks = tokenize(&normalise(text));
-        let mut counts: HashMap<&str, f32> = HashMap::new();
-        let mut bigrams: Vec<String> = Vec::with_capacity(toks.len().saturating_sub(1));
-        for pair in toks.windows(2) {
-            bigrams.push(format!("{} {}", pair[0], pair[1]));
-        }
-        for gram in toks
-            .iter()
-            .map(String::as_str)
-            .chain(bigrams.iter().map(String::as_str))
-        {
-            if let Some((term, _)) = self.terms.get_key_value(gram) {
-                *counts.entry(term.as_str()).or_insert(0.0) += 1.0;
-            }
-        }
-        if counts.is_empty() {
-            return sigmoid(self.intercept);
-        }
-        let mut vec: Vec<(f32, f32)> = Vec::with_capacity(counts.len());
-        for (term, count) in &counts {
-            let (idf, w) = self.terms[*term];
-            vec.push(((1.0 + count.ln()) * idf, w));
-        }
-        let norm = vec.iter().map(|(v, _)| v * v).sum::<f32>().sqrt();
-        if norm == 0.0 {
-            return sigmoid(self.intercept);
-        }
-        let z = vec.iter().map(|(v, w)| (v / norm) * w).sum::<f32>() + self.intercept;
-        sigmoid(z)
+        self.model.score(text)
     }
 
     /// A thread's score: the higher of its first and last window, matching the
@@ -191,10 +102,6 @@ impl LexicalRouter {
         }
         best
     }
-}
-
-fn sigmoid(z: f32) -> f32 {
-    1.0 / (1.0 + (-z).exp())
 }
 
 /// How many threads a phone of `total_threads` may promote. Rank-based, and at
@@ -255,17 +162,6 @@ mod tests {
             );
         }
         assert!(worst < 1e-3, "worst drift {worst}");
-    }
-
-    /// The tokenizer's own rules, which the parity fixture can only cover
-    /// indirectly: two-character minimum, underscores are word characters,
-    /// accents are folded, case is ignored.
-    #[test]
-    fn tokens_follow_scikit_learns_pattern() {
-        assert_eq!(tokenize(&normalise("hi a bc")), vec!["hi", "bc"]);
-        assert_eq!(tokenize(&normalise("Café RENOVÉ")), vec!["cafe", "renove"]);
-        assert_eq!(tokenize(&normalise("a_b c-d 12")), vec!["a_b", "12"]);
-        assert!(tokenize(&normalise("¿ x ?")).is_empty());
     }
 
     /// A thread with no vocabulary at all must not produce a NaN or a panic —
