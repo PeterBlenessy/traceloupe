@@ -28,8 +28,9 @@
 
 /// Points needed to call it supply. Reaching it requires BOTH halves — the
 /// substance weights and the arrangement weights are sized so neither can get
-/// there alone.
-const FLAG_AT: u32 = 4;
+/// there alone. Public so the scan compares against THIS constant rather than
+/// a copy of the number that can drift away from it.
+pub const FLAG_AT: u32 = 4;
 
 struct Signal {
     weight: u32,

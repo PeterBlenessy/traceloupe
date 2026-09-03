@@ -901,7 +901,7 @@ where
                     continue;
                 }
                 let sc = drugs::score(&m.text);
-                if sc < 4 || best.is_some_and(|(_, b)| b >= sc) {
+                if sc < drugs::FLAG_AT || best.is_some_and(|(_, b)| b >= sc) {
                     continue;
                 }
                 best = Some((mi, sc));
