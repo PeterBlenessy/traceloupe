@@ -11,6 +11,7 @@ pub mod civil_heads;
 pub mod client;
 pub mod content_key;
 pub mod cost_model;
+pub mod drugs;
 pub mod engine;
 pub mod eval;
 pub mod grooming_onnx;

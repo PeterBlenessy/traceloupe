@@ -74,6 +74,8 @@ pub struct TriageOutcome {
     pub scam_flagged: usize,
     /// Threads the hate tier flagged.
     pub hate_flagged: usize,
+    /// Threads the drugs tier flagged.
+    pub drugs_flagged: usize,
     /// Threads where the head pass errored (audited, skipped).
     pub heads_failed: usize,
     /// Threads the router promoted into the worklist — the census had kept
@@ -865,6 +867,65 @@ where
         }
     }
 
+    // --- phase 3.58: the drugs tier ---
+    // Rules, not vocabulary: a substance reference AND the shape of a supply
+    // arrangement, because "Molly" and "Charlie" are names, "ice" is weather
+    // and "weed" is gardening far more often than they are drugs. Neither half
+    // fires alone (see drugs.rs). Measured: 0 of 30 legitimate-substance-talk
+    // items, and 1 of 4,827 real personal SMS — that one a genuine request to
+    // source cannabis.
+    if !out.cancelled {
+        use crate::safety_scan::drugs;
+        let kept = &pre_budget_ids;
+        let text_flagged: std::collections::HashSet<String> = provisional
+            .iter()
+            .filter(|(_, v, _)| v.category == Category::DrugsIllegal)
+            .map(|(w, _, _)| w.items[w.focus].thread_identifier.clone())
+            .collect();
+        for thread in threads.iter() {
+            if cancel.is_cancelled() {
+                out.cancelled = true;
+                break;
+            }
+            if thread
+                .first()
+                .is_some_and(|m| text_flagged.contains(&m.thread_identifier))
+            {
+                continue;
+            }
+            // Both directions matter here, unlike the scam tier: supply sent
+            // FROM the device is as much a finding as supply offered to it.
+            let mut best: Option<(usize, u32)> = None;
+            for (mi, m) in thread.iter().enumerate() {
+                if kept.contains(&m.source_id) {
+                    continue;
+                }
+                let sc = drugs::score(&m.text);
+                if sc < 4 || best.is_some_and(|(_, b)| b >= sc) {
+                    continue;
+                }
+                best = Some((mi, sc));
+            }
+            if let Some((mi, _)) = best {
+                let m = &thread[mi];
+                out.drugs_flagged += 1;
+                let window = triage::context_window(thread, mi, ScanMode::default_radius());
+                let why = drugs::explain(&m.text).join("; ");
+                provisional.push((
+                    window,
+                    FocusVerdict {
+                        category: Category::DrugsIllegal,
+                        // Arranging supply, with nothing here about volume or
+                        // coercion: severity 2.
+                        severity: 2,
+                        rationale: format!("Arranging supply of a controlled drug — {why}."),
+                    },
+                    true,
+                ));
+            }
+        }
+    }
+
     // --- phase 3.6: the coercive-control pattern tier (#529) ---
     // Pure sender+timestamp arithmetic — no model, no text, negligible cost,
     // so it runs on every scan unconditionally. Its verdicts are
@@ -1081,7 +1142,7 @@ where
         now,
         "triage_deep_scan",
         &format!(
-            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={} heads_flagged={} heads_failed={} patterns_flagged={} scam_flagged={} hate_flagged={} routed_promoted={} router_failed={}",
+            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={} heads_flagged={} heads_failed={} patterns_flagged={} scam_flagged={} hate_flagged={} drugs_flagged={} routed_promoted={} router_failed={}",
             out.deep_scanned,
             out.findings,
             out.rejected,
@@ -1097,6 +1158,7 @@ where
             out.patterns_flagged,
             out.scam_flagged,
             out.hate_flagged,
+            out.drugs_flagged,
             out.routed_promoted,
             out.router_failed
         ),
@@ -1854,6 +1916,73 @@ mod tests {
         raw.lines()
             .find(|l| !l.trim().is_empty() && tier.is_hate(l))
             .map(str::to_string)
+    }
+
+    /// The drugs tier at engine level: a supply message the census rejected
+    /// becomes one finding, ordinary substance talk does not, and the
+    /// rationale names only signals the message actually contains.
+    #[test]
+    fn a_supply_message_becomes_one_drugs_finding() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![
+            vec![
+                msg_at(1, "them", "you around? 2 grams of mdma, 40 quid", 1000),
+                msg_at(2, "them", "meet outside the station at 8", 2000),
+            ],
+            vec![
+                msg_at(
+                    3,
+                    "them",
+                    "picked up my prescription, 30 tablets, one at night",
+                    3000,
+                ),
+                msg_at(4, "me", "good, dont forget to eat first", 3100),
+            ],
+            vec![msg_at(
+                5,
+                "them",
+                "molly said she can do saturday, book it for 4",
+                4000,
+            )],
+        ];
+        let embed = |_: &str| Ok(vec![0.0, 1.0]); // census keeps nothing
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> { unreachable!() };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> {
+            panic!("conversation-level verdicts never meet the confirmer")
+        };
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Thorough,
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(None),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.drugs_flagged, 1, "one supply thread, one finding");
+        let rows = db.list_findings(Some(scan)).unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the prescription and the name are not findings"
+        );
+        assert_eq!(rows[0].category, Category::DrugsIllegal);
+        assert!(
+            rows[0].rationale.contains("quantity") && rows[0].rationale.contains("price"),
+            "the rationale must name what fired: {}",
+            rows[0].rationale
+        );
     }
 
     fn msg_at(id: i64, sender: &str, text: &str, at: i64) -> CensusInput {
